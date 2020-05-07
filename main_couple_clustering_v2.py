@@ -123,13 +123,13 @@ class CoupleRTM(object):
         self.fake_y2 = tf.placeholder(tf.float32, [None, self.y_dim2], name='fake_y2')
         
         self.dx = self.dx_net(self.x)
-        self.dy1 = self.dy_net(self.y1)
-        self.dy2 = self.dy_net(self.y2)
+        self.dy1 = self.dy_net1(self.y1)
+        self.dy2 = self.dy_net2(self.y2)
 
         self.d_fake_x1 = self.dx_net(self.fake_x1)
         self.d_fake_x2 = self.dx_net(self.fake_x2)
-        self.d_fake_y1 = self.dy_net(self.fake_y1)
-        self.d_fake_y2 = self.dy_net(self.fake_y2)
+        self.d_fake_y1 = self.dy_net1(self.fake_y1)
+        self.d_fake_y2 = self.dy_net2(self.fake_y2)
 
         #-log(D(x))
         self.dx_loss = (2*tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx, labels=tf.ones_like(self.dx))) \
@@ -145,7 +145,8 @@ class CoupleRTM(object):
  
         #weight clipping
         self.clip_dx = [var.assign(tf.clip_by_value(var, -0.01, 0.01)) for var in self.dx_net.vars]
-        self.clip_dy = [var.assign(tf.clip_by_value(var, -0.01, 0.01)) for var in self.dy_net.vars]
+        self.clip_dy1 = [var.assign(tf.clip_by_value(var, -0.01, 0.01)) for var in self.dy_net1.vars]
+        self.clip_dy2 = [var.assign(tf.clip_by_value(var, -0.01, 0.01)) for var in self.dy_net2.vars]
 
         self.lr = tf.placeholder(tf.float32, None, name='learning_rate')
         self.g_h_optim = tf.train.AdamOptimizer(learning_rate=self.lr, beta1=0.5, beta2=0.9) \
