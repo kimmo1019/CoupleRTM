@@ -34,22 +34,28 @@ Instructions: Roundtrip model for clustering
     Dx(.) - discriminator network in x space (latent space)
     Dy(.) - discriminator network in y space (observation space)
 '''
-class RoundtripModel(object):
-    def __init__(self, g_net, h_net, dx_net, dy_net, x_sampler, y_sampler, nb_classes, data, pool, batch_size, alpha, beta, is_train):
+class CoupleRTM(object):
+    def __init__(self, g_net1, g_net2, h_net1, h_net2, dx_net, dy_net1, dy_net2, x_sampler, y_sampler, nb_classes, data, pool, batch_size, alpha, beta, gamma, is_train):
         self.data = data
-        self.g_net = g_net
-        self.h_net = h_net
+        self.g_net1 = g_net1
+        self.g_net2 = g_net2
+        self.h_net1 = h_net1
+        self.h_net2 = h_net2
         self.dx_net = dx_net
-        self.dy_net = dy_net
+        self.dy_net1 = dy_net1
+        self.dy_net2 = dy_net2
         self.x_sampler = x_sampler
         self.y_sampler = y_sampler
+        self.A = self.y_sampler.A
         self.nb_classes = nb_classes
         self.batch_size = batch_size
         self.alpha = alpha
         self.beta = beta
+        self.gamma = gamma
         self.pool = pool
         self.x_dim = self.dx_net.input_dim
-        self.y_dim = self.dy_net.input_dim
+        self.y_dim1 = self.dy_net1.input_dim
+        self.y_dim2 = self.dy_net2.input_dim
         tf.reset_default_graph()
 
 
@@ -57,60 +63,83 @@ class RoundtripModel(object):
         self.x_onehot = tf.placeholder(tf.float32, [None, self.nb_classes], name='x_onehot')
         self.x_combine = tf.concat([self.x,self.x_onehot],axis=1,name='x_combine')
 
-        self.y = tf.placeholder(tf.float32, [None, self.y_dim], name='y')
+        self.y1 = tf.placeholder(tf.float32, [None, self.y_dim1], name='y1')
+        self.y2 = tf.placeholder(tf.float32, [None, self.y_dim2], name='y2')
 
-        self.y_ = self.g_net(self.x_combine,reuse=False)
+        self.y1_ = self.g_net1(self.x_combine,reuse=False)
+        self.y2_ = self.g_net2(self.x_combine,reuse=False)
 
-        self.x_, self.x_onehot_, self.x_logits_ = self.h_net(self.y,reuse=False)#continuous + softmax + before_softmax
+        self.x1_, self.x_onehot1_, self.x_logits1_ = self.h_net1(self.y1,reuse=False)#continuous + softmax + before_softmax
+        self.x2_, self.x_onehot2_, self.x_logits2_ = self.h_net2(self.y2,reuse=False)
         
-        self.x__, self.x_onehot__, self.x_logits__ = self.h_net(self.y_)
+        self.x1__, self.x_onehot1__, self.x_logits1__ = self.h_net1(self.y1_)
+        self.x2__, self.x_onehot2__, self.x_logits2__ = self.h_net2(self.y2_)
 
-        self.x_combine_ = tf.concat([self.x_, self.x_onehot_],axis=1)
-        self.y__ = self.g_net(self.x_combine_)
+        self.x_combine1_ = tf.concat([self.x1_, self.x_onehot1_],axis=1)
+        self.x_combine2_ = tf.concat([self.x2_, self.x_onehot2_],axis=1)
+        self.y1__ = self.g_net1(self.x_combine1_)
+        self.y2__ = self.g_net2(self.x_combine2_)
 
-        self.dy_ = self.dy_net(self.y_, reuse=False)
-        self.dx_ = self.dx_net(self.x_, reuse=False)
+        self.dy1_ = self.dy_net1(self.y1_, reuse=False)
+        self.dy2_ = self.dy_net2(self.y2_, reuse=False)
 
-        self.l2_loss_x = tf.reduce_mean((self.x - self.x__)**2)
-        self.l2_loss_y = tf.reduce_mean((self.y - self.y__)**2)
+        #check this later, use one Dx or two Dx?
+        self.dx1_ = self.dx_net(self.x1_, reuse=False)
+        self.dx2_ = self.dx_net(self.x2_)
+
+        self.l2_loss_x = (tf.reduce_mean((self.x - self.x1__)**2)+\
+            tf.reduce_mean((self.x - self.x2__)**2))/2.0
+        self.l2_loss_y = (tf.reduce_mean((self.y1 - self.y1__)**2)+\
+            tf.reduce_mean((self.y2 - self.y2__)**2))/2.0
 
         #self.CE_loss_x = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=self.x_onehot, logits=self.x_logits__))
-        self.CE_loss_x = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.x_logits__,labels=self.x_onehot))
+        self.CE_loss_x = (tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.x_logits1__,labels=self.x_onehot))+\
+            tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.x_logits2__,labels=self.x_onehot)))/2.0
         
+        #Couple loss
+        self.couple_loss = -tf.reduce_mean(tf.linalg.tensor_diag_part(tf.matmul(tf.matmul(self.y1, self.A),tf.transpose(self.y2))))
+
         #-log(D(x))
-        self.g_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy_, labels=tf.ones_like(self.dy_)))
-        self.h_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx_, labels=tf.ones_like(self.dx_)))
-        #(1-D(x))^2
-        #self.g_loss_adv = tf.reduce_mean((0.9*tf.ones_like(self.dy_)  - self.dy_)**2)
-        #self.h_loss_adv = tf.reduce_mean((0.9*tf.ones_like(self.dx_) - self.dx_)**2)
+        self.g_loss_adv = (tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy1_, labels=tf.ones_like(self.dy1_)))+\
+            tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy2_, labels=tf.ones_like(self.dy2_))))/2.0
+        
+        self.h_loss_adv = (tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx1_, labels=tf.ones_like(self.dx1_)))+\
+            tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx2_, labels=tf.ones_like(self.dx2_))))/2.0
 
         self.g_loss = self.g_loss_adv + self.alpha*self.l2_loss_x + self.beta*self.l2_loss_y
         self.h_loss = self.h_loss_adv + self.alpha*self.l2_loss_x + self.beta*self.l2_loss_y
-        self.g_h_loss = self.g_loss_adv + self.h_loss_adv + self.alpha*(self.l2_loss_x + self.l2_loss_y) + self.beta*self.CE_loss_x
+        self.g_h_loss = self.g_loss_adv + self.h_loss_adv + self.alpha*(self.l2_loss_x + self.l2_loss_y) +\
+             self.beta*self.CE_loss_x + self.gamma*self.couple_loss
 
 
-        self.fake_x = tf.placeholder(tf.float32, [None, self.x_dim], name='fake_x')
-        self.fake_x_onehot = tf.placeholder(tf.float32, [None, self.nb_classes], name='fake_x_onehot')
-        self.fake_x_combine = tf.concat([self.fake_x,self.fake_x_onehot],axis=1,name='fake_x_combine')
+        self.fake_x1 = tf.placeholder(tf.float32, [None, self.x_dim], name='fake_x1')
+        self.fake_x_onehot1 = tf.placeholder(tf.float32, [None, self.nb_classes], name='fake_x_onehot1')
+        self.fake_x_combine1 = tf.concat([self.fake_x1,self.fake_x_onehot1],axis=1,name='fake_x_combine1')
+        self.fake_x2 = tf.placeholder(tf.float32, [None, self.x_dim], name='fake_x2')
+        self.fake_x_onehot2 = tf.placeholder(tf.float32, [None, self.nb_classes], name='fake_x_onehot2')
+        self.fake_x_combine2 = tf.concat([self.fake_x2,self.fake_x_onehot2],axis=1,name='fake_x_combine2')
 
-        self.fake_y = tf.placeholder(tf.float32, [None, self.y_dim], name='fake_y')
+        self.fake_y1 = tf.placeholder(tf.float32, [None, self.y_dim1], name='fake_y1')
+        self.fake_y2 = tf.placeholder(tf.float32, [None, self.y_dim2], name='fake_y2')
         
         self.dx = self.dx_net(self.x)
-        self.dy = self.dy_net(self.y)
+        self.dy1 = self.dy_net(self.y1)
+        self.dy2 = self.dy_net(self.y2)
 
-        self.d_fake_x = self.dx_net(self.fake_x)
-        self.d_fake_y = self.dy_net(self.fake_y)
+        self.d_fake_x1 = self.dx_net(self.fake_x1)
+        self.d_fake_x2 = self.dx_net(self.fake_x2)
+        self.d_fake_y1 = self.dy_net(self.fake_y1)
+        self.d_fake_y2 = self.dy_net(self.fake_y2)
 
-        #(1-D(x))^2
-        # self.dx_loss = (tf.reduce_mean((0.9*tf.ones_like(self.dx) - self.dx)**2) \
-        #         +tf.reduce_mean((0.1*tf.ones_like(self.d_fake_x) - self.d_fake_x)**2))/2.0
-        # self.dy_loss = (tf.reduce_mean((0.9*tf.ones_like(self.dy) - self.dy)**2) \
-        #         +tf.reduce_mean((0.1*tf.ones_like(self.d_fake_y) - self.d_fake_y)**2))/2.0
         #-log(D(x))
-        self.dx_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx, labels=tf.ones_like(self.dx))) \
-            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_x, labels=tf.zeros_like(self.d_fake_x)))
-        self.dy_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy, labels=tf.ones_like(self.dy))) \
-            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_y, labels=tf.zeros_like(self.d_fake_y)))
+        self.dx_loss = (2*tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx, labels=tf.ones_like(self.dx))) \
+            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_x1, labels=tf.zeros_like(self.d_fake_x1))) \
+            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_x2, labels=tf.zeros_like(self.d_fake_x2))))/4.0
+
+        self.dy_loss = (tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy1, labels=tf.ones_like(self.dy1))) \
+            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_y1, labels=tf.zeros_like(self.d_fake_y1))) \
+            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy2, labels=tf.ones_like(self.dy2))) \
+            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_y2, labels=tf.zeros_like(self.d_fake_y2))))/4.0
 
         self.d_loss = self.dx_loss + self.dy_loss
  
@@ -120,9 +149,9 @@ class RoundtripModel(object):
 
         self.lr = tf.placeholder(tf.float32, None, name='learning_rate')
         self.g_h_optim = tf.train.AdamOptimizer(learning_rate=self.lr, beta1=0.5, beta2=0.9) \
-                .minimize(self.g_h_loss, var_list=self.g_net.vars+self.h_net.vars)
+                .minimize(self.g_h_loss, var_list=self.g_net1.vars+self.h_net1.vars+self.g_net2.vars+self.h_net2.vars)
         self.d_optim = tf.train.AdamOptimizer(learning_rate=self.lr, beta1=0.5, beta2=0.9) \
-                .minimize(self.d_loss, var_list=self.dx_net.vars+self.dy_net.vars)
+                .minimize(self.d_loss, var_list=self.dx_net.vars+self.dy_net1.vars+self.dy_net2.vars)
 
         now = datetime.datetime.now(dateutil.tz.tzlocal())
         self.timestamp = now.strftime('%Y%m%d_%H%M%S')
@@ -138,12 +167,12 @@ class RoundtripModel(object):
         self.d_merged_summary = tf.summary.merge([self.dx_loss_summary,self.dy_loss_summary])
 
         #graph path for tensorboard visualization
-        self.graph_dir = 'graph/cluster_{}_{}_x_dim={}_y_dim={}_alpha={}_beta={}'.format(self.timestamp,self.data,self.x_dim, self.y_dim, self.alpha, self.beta)
+        self.graph_dir = 'graph/cluster_{}_{}_x_dim={}_y_dim1={}_y_dim2={}_alpha={}_beta={}_gamma={}'.format(self.timestamp,self.data,self.x_dim, self.y_dim1, self.y_dim2, self.alpha, self.beta, self.gamma)
         if not os.path.exists(self.graph_dir) and is_train:
             os.makedirs(self.graph_dir)
         
         #save path for saving predicted data
-        self.save_dir = 'data/cluster_{}_{}_x_dim={}_y_dim={}_alpha={}_beta={}'.format(self.timestamp,self.data,self.x_dim, self.y_dim, self.alpha, self.beta)
+        self.save_dir = 'data/cluster_{}_{}_x_dim={}_y_dim1={}_y_dim2={}_alpha={}_beta={}_gamma={}'.format(self.timestamp,self.data,self.x_dim, self.y_dim1, self.y_dim2, self.alpha, self.beta, self.gamma)
         if not os.path.exists(self.save_dir) and is_train:
             os.makedirs(self.save_dir)
 
@@ -156,44 +185,42 @@ class RoundtripModel(object):
 
 
     def train(self, epochs, patience):
-        #data_y, label_y = self.y_sampler.load_all()
-        data_y_train = copy.copy(self.y_sampler.load_all()[0])
+        data_y1_train = self.y_sampler.load_all()[0]
+        data_y2_train = self.y_sampler.load_all()[2]
         counter = 1
         self.sess.run(tf.global_variables_initializer())
         self.summary_writer=tf.summary.FileWriter(self.graph_dir,graph=tf.get_default_graph())
         start_time = time.time()
         for epoch in range(epochs):
-            np.random.shuffle(data_y_train)
             lr = 1e-4 #if epoch < epochs/2 else 1e-4 #*float(epochs-epoch)/float(epochs-epochs/2)
-            batch_idxs = len(data_y_train) // self.batch_size
+            batch_idxs = max(len(data_y1_train),len(data_y2_train)) // self.batch_size
             for idx in range(batch_idxs):
                 bx, bx_onehot = self.x_sampler.train(batch_size)
-                by = data_y_train[self.batch_size*idx:self.batch_size*(idx+1)]
+                by1 = random.sample(data_y1_train,self.batch_size)
+                by2 = random.sample(data_y2_train,self.batch_size)
                 #update G and get generated fake data
-                fake_bx, fake_by, g_summary, _ = self.sess.run([self.x_,self.y_,self.g_merged_summary ,self.g_h_optim], feed_dict={self.x: bx, self.x_onehot: bx_onehot, self.y: by, self.lr:lr})
+                fake_bx1,fake_bx2,fake_by1,fake_by2,g_summary, _ = self.sess.run([self.x1_,self.x2_, self.y1_,self.y2_, self.g_merged_summary ,self.g_h_optim], feed_dict={self.x: bx, self.x_onehot: bx_onehot, self.y1: by1, self.y2: by2, self.lr:lr})
                 self.summary_writer.add_summary(g_summary,counter)
                 #random choose one batch from the previous 50 batches
-                #[fake_bx,fake_by] = self.pool([fake_bx,fake_by])
+                #[fake_bx1,fake_bx2,fake_by1,fake_by2] = self.pool([fake_bx1,fake_bx2,fake_by1,fake_by2])
                 #update D
-                d_summary,_ = self.sess.run([self.d_merged_summary, self.d_optim], feed_dict={self.x: bx, self.y: by, self.fake_x: fake_bx, self.fake_y: fake_by,self.lr:lr})
+                d_summary,_ = self.sess.run([self.d_merged_summary, self.d_optim], feed_dict={self.x: bx, self.y1: by1, self.y2: by2,self.fake_x1: fake_bx1, self.fake_x2: fake_bx2,self.fake_y1: fake_by1,self.fake_y2: fake_by2,self.lr:lr})
                 self.summary_writer.add_summary(d_summary,counter)
-                #quick test on a random batch data
+                #quick test on a batch data
                 if counter % 100 == 0:
-                    # bx, bx_onehot = self.x_sampler.train(batch_size)
-                    # by = self.y_sampler.train(batch_size)
-                    g_loss_adv, h_loss_adv, CE_loss, l2_loss_x, l2_loss_y, g_loss, \
-                        h_loss, g_h_loss, fake_bx, fake_by = self.sess.run(
-                        [self.g_loss_adv, self.h_loss_adv, self.CE_loss_x, self.l2_loss_x, self.l2_loss_y, \
-                        self.g_loss, self.h_loss, self.g_h_loss, self.x_, self.y_],
-                        feed_dict={self.x: bx, self.x_onehot: bx_onehot, self.y: by}
+                    g_loss_adv, h_loss_adv, CE_loss,couple_loss,l2_loss_x, l2_loss_y, g_loss, \
+                        h_loss, g_h_loss, fake_bx1, fake_bx2, fake_by1, fake_by2 = self.sess.run(
+                        [self.g_loss_adv, self.h_loss_adv, self.CE_loss_x,self.couple_loss, self.l2_loss_x, self.l2_loss_y, \
+                        self.g_loss, self.h_loss, self.g_h_loss, self.x1_,self.x2_, self.y1_, self.y2_],
+                        feed_dict={self.x: bx, self.x_onehot: bx_onehot, self.y1: by1, self.y2: by2}
                     )
                     dx_loss, dy_loss, d_loss = self.sess.run([self.dx_loss, self.dy_loss, self.d_loss], \
-                        feed_dict={self.x: bx, self.x_onehot: bx_onehot, self.y: by, self.fake_x: fake_bx, self.fake_y: fake_by})
+                        feed_dict={self.x: bx, self.x_onehot: bx_onehot, self.y1: by1,self.y2:by2, self.fake_x1: fake_bx1,self.fake_x2: fake_bx2, self.fake_y1: fake_by1,self.fake_y2: fake_by2})
 
-                    print('Epoch [%d] Iter [%d] Time [%.4f] g_loss_adv [%.4f] h_loss_adv [%.4f] CE_loss [%.4f] l2_loss_x [%.4f] \
+                    print('Epoch [%d] Iter [%d] Time [%.4f] g_loss_adv [%.4f] h_loss_adv [%.4f] CE_loss [%.4f] couple_loss [%.4f] l2_loss_x [%.4f] \
                         l2_loss_y [%.4f] g_loss [%.4f] h_loss [%.4f] g_h_loss [%.4f] dx_loss [%.4f] \
                         dy_loss [%.4f] d_loss [%.4f]' %
-                        (epoch, counter, time.time() - start_time, g_loss_adv, h_loss_adv, CE_loss, l2_loss_x, l2_loss_y, \
+                        (epoch, counter, time.time() - start_time, g_loss_adv, h_loss_adv, CE_loss, couple_loss, l2_loss_x, l2_loss_y, \
                         g_loss, h_loss, g_h_loss, dx_loss, dy_loss, d_loss))                 
                 counter+=1
 
@@ -204,51 +231,68 @@ class RoundtripModel(object):
                     self.evaluate(timestamp,epoch)
 
     def evaluate(self,timestamp,epoch,run_kmeans=False):
-        data_y, label_y = self.y_sampler.load_all()
-        N = data_y.shape[0]
-        data_x_, data_x_onehot_ = self.predict_x(data_y)
-        np.savez('{}/data_at_{}.npz'.format(self.save_dir, epoch+1),data_x_,data_x_onehot_,label_y)
-        label_infer = np.argmax(data_x_onehot_, axis=1)
-        purity = metric.compute_purity(label_infer, label_y)
-        nmi = normalized_mutual_info_score(label_y, label_infer)
-        ari = adjusted_rand_score(label_y, label_infer)
-        self.cluster_heatmap(epoch, label_infer, label_y)
-        print('RTM: Purity = {}, NMI = {}, ARI = {}'.format(purity,nmi,ari))
+        data_y1, label_y1, data_y2, label_y2= self.y_sampler.load_all()
+        data_x1_, data_x_onehot1_ = self.predict_x1(data_y1)
+        data_x2_, data_x_onehot2_ = self.predict_x2(data_y2)
+        np.savez('{}/data_at_{}.npz'.format(self.save_dir, epoch+1),data_x1_,data_x_onehot1_,label_y1,data_x2_,data_x_onehot2_,label_y2)
+        #scRNA-seq
+        label_infer1 = np.argmax(data_x_onehot1_, axis=1)
+        purity1 = metric.compute_purity(label_infer1, label_y1)
+        nmi1 = normalized_mutual_info_score(label_y1, label_infer1)
+        ari1 = adjusted_rand_score(label_y1, label_infer1)
+        self.cluster_heatmap(epoch, label_infer1, label_y1,'scRNA')
+        print('CoupleRTM scRNA-seq: NMI = {}, ARI = {}, Purity = {}'.format(nmi1,ari1,purity1))
+        #scATAC-seq
+        label_infer2 = np.argmax(data_x_onehot2_, axis=1)
+        purity2 = metric.compute_purity(label_infer2, label_y2)
+        nmi2 = normalized_mutual_info_score(label_y2, label_infer2)
+        ari2 = adjusted_rand_score(label_y2, label_infer2)
+        self.cluster_heatmap(epoch, label_infer2, label_y2,'scATAC')
+        print('CoupleRTM scATAC-seq: NMI = {}, ARI = {}, Purity = {}'.format(nmi2,ari2,purity2))
+
+
         f = open('%s/log.txt'%self.save_dir,'a+')
-        f.write('%.4f\t%.4f\t%.4f\t%d\n'%(purity,nmi,ari,epoch))
+        f.write('%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%.4f\t%d\n'%(nmi1,ari1,purity1,nmi2,ari2,purity2,epoch))
         f.close()
         #k-means
         if run_kmeans:
-            km = KMeans(n_clusters=nb_classes, random_state=0).fit(data_y)
+            #scRNA-seq
+            km = KMeans(n_clusters=nb_classes, random_state=0).fit(data_y1)
             label_kmeans = km.labels_
-            purity = metric.compute_purity(label_kmeans, label_y)
-            nmi = normalized_mutual_info_score(label_y, label_kmeans)
-            ari = adjusted_rand_score(label_y, label_kmeans)
-            print('K-means: Purity = {}, NMI = {}, ARI = {}'.format(purity,nmi,ari))
+            purity = metric.compute_purity(label_kmeans, label_y1)
+            nmi = normalized_mutual_info_score(label_y1, label_kmeans)
+            ari = adjusted_rand_score(label_y1, label_kmeans)
+            print('K-means scRNA-seq: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
             f = open('%s/log.txt'%self.save_dir,'a+')
-            f.write('%.4f\t%.4f\t%.4f\n'%(purity,nmi,ari))
+            f.write('K-means scRNA-seq: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
+            #scATAC-seq
+            km = KMeans(n_clusters=nb_classes, random_state=0).fit(data_y2)
+            label_kmeans = km.labels_
+            purity = metric.compute_purity(label_kmeans, label_y2)
+            nmi = normalized_mutual_info_score(label_y2, label_kmeans)
+            ari = adjusted_rand_score(label_y2, label_kmeans)
+            print('K-means scATAC-seq: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
+            f = open('%s/log.txt'%self.save_dir,'a+')
+            f.write('K-means scATAC-seq: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
             f.close() 
     
-    def cluster_heatmap(self,epoch,label_pre,label_true):
+    def cluster_heatmap(self,epoch,label_pre,label_true,suffix=''):
         assert len(label_pre)==len(label_true)
         confusion_mat = np.zeros((self.nb_classes,self.nb_classes))
         for i in range(len(label_true)):
             confusion_mat[label_pre[i]][label_true[i]] += 1
-        #columns=[item for item in range(1,11)]
-        #index=[item for item in range(1,11)]
-        #df = pd.DataFrame(confusion_mat,columns=columns,index=index)
         plt.figure()
         df = pd.DataFrame(confusion_mat)
         sns.heatmap(df,annot=True, cmap="Blues")
-        plt.savefig('%s/heatmap_%d.png'%(self.save_dir,epoch),dpi=200)
+        plt.savefig('%s/heatmap_%d_%s.png'%(self.save_dir,epoch,suffix),dpi=200)
         plt.close()
 
 
-    #predict with y_=G(x)
-    def predict_y(self, x, x_onehot, bs=256):
+    #predict with y1_=G1(x)
+    def predict_y1(self, x, x_onehot, bs=256):
         assert x.shape[-1] == self.x_dim
         N = x.shape[0]
-        y_pred = np.zeros(shape=(N, self.y_dim)) 
+        y_pred = np.zeros(shape=(N, self.y_dim1)) 
         for b in range(int(np.ceil(N*1.0 / bs))):
             if (b+1)*bs > N:
                ind = np.arange(b*bs, N)
@@ -256,13 +300,29 @@ class RoundtripModel(object):
                ind = np.arange(b*bs, (b+1)*bs)
             batch_x = x[ind, :]
             batch_x_onehot = x_onehot[ind, :]
-            batch_y_ = self.sess.run(self.y_, feed_dict={self.x:batch_x, self.x_onehot:batch_x_onehot})
+            batch_y_ = self.sess.run(self.y1_, feed_dict={self.x:batch_x, self.x_onehot:batch_x_onehot})
+            y_pred[ind, :] = batch_y_
+        return y_pred
+
+    #predict with y2_=G2(x)
+    def predict_y1(self, x, x_onehot, bs=256):
+        assert x.shape[-1] == self.x_dim
+        N = x.shape[0]
+        y_pred = np.zeros(shape=(N, self.y_dim2)) 
+        for b in range(int(np.ceil(N*1.0 / bs))):
+            if (b+1)*bs > N:
+               ind = np.arange(b*bs, N)
+            else:
+               ind = np.arange(b*bs, (b+1)*bs)
+            batch_x = x[ind, :]
+            batch_x_onehot = x_onehot[ind, :]
+            batch_y_ = self.sess.run(self.y2_, feed_dict={self.x:batch_x, self.x_onehot:batch_x_onehot})
             y_pred[ind, :] = batch_y_
         return y_pred
     
-    #predict with x_=H(y)
-    def predict_x(self,y,bs=256):
-        assert y.shape[-1] == self.y_dim
+    #predict with x1_=H1(y)
+    def predict_x1(self,y,bs=256):
+        assert y.shape[-1] == self.y_dim1
         N = y.shape[0]
         x_pred = np.zeros(shape=(N, self.x_dim)) 
         x_onehot = np.zeros(shape=(N, self.nb_classes)) 
@@ -272,11 +332,27 @@ class RoundtripModel(object):
             else:
                ind = np.arange(b*bs, (b+1)*bs)
             batch_y = y[ind, :]
-            batch_x_,batch_x_onehot_ = self.sess.run([self.x_, self.x_onehot_], feed_dict={self.y:batch_y})
+            batch_x_,batch_x_onehot_ = self.sess.run([self.x1_, self.x_onehot1_], feed_dict={self.y1:batch_y})
             x_pred[ind, :] = batch_x_
             x_onehot[ind, :] = batch_x_onehot_
         return x_pred, x_onehot
 
+    #predict with x2_=H2(y)
+    def predict_x2(self,y,bs=256):
+        assert y.shape[-1] == self.y_dim2
+        N = y.shape[0]
+        x_pred = np.zeros(shape=(N, self.x_dim)) 
+        x_onehot = np.zeros(shape=(N, self.nb_classes)) 
+        for b in range(int(np.ceil(N*1.0 / bs))):
+            if (b+1)*bs > N:
+               ind = np.arange(b*bs, N)
+            else:
+               ind = np.arange(b*bs, (b+1)*bs)
+            batch_y = y[ind, :]
+            batch_x_,batch_x_onehot_ = self.sess.run([self.x2_, self.x_onehot2_], feed_dict={self.y2:batch_y})
+            x_pred[ind, :] = batch_x_
+            x_onehot[ind, :] = batch_x_onehot_
+        return x_pred, x_onehot
 
     def save(self,epoch):
 
@@ -313,6 +389,7 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--alpha', type=float, default=10.0)
     parser.add_argument('--beta', type=float, default=10.0)
+    parser.add_argument('--gamma', type=float, default=0.001)
     parser.add_argument('--timestamp', type=str, default='')
     parser.add_argument('--train', type=bool, default=False)
     args = parser.parse_args()
@@ -327,6 +404,7 @@ if __name__ == '__main__':
     patience = args.patience
     alpha = args.alpha
     beta = args.beta
+    gamma = args.gamma
     timestamp = args.timestamp
     is_train = args.train
     #g_net = model.Generator(input_dim=x_dim,output_dim = y_dim,name='g_net',nb_layers=10,nb_units=512)
@@ -339,29 +417,30 @@ if __name__ == '__main__':
     h_net1 = model.Encoder(input_dim=y_dim1,output_dim = x_dim+nb_classes,feat_dim=x_dim,name='h_net1',nb_layers=10,nb_units=256)
     h_net2 = model.Encoder(input_dim=y_dim2,output_dim = x_dim+nb_classes,feat_dim=x_dim,name='h_net2',nb_layers=10,nb_units=256)
 
-    dx_net = model.Discriminator(input_dim=x_dim,name='dx_net',nb_layers=2,nb_units=256)
+    dx_net = model.Discriminator(input_dim=x_dim,name='dx_net',nb_layers=4,nb_units=256)
     
-    dy_net1 = model.Discriminator(input_dim=y_dim1,name='dy_net1',nb_layers=2,nb_units=256)
-    dy_net2 = model.Discriminator(input_dim=y_dim2,name='dy_net2',nb_layers=2,nb_units=256)
+    dy_net1 = model.Discriminator(input_dim=y_dim1,name='dy_net1',nb_layers=4,nb_units=256)
+    dy_net2 = model.Discriminator(input_dim=y_dim2,name='dy_net2',nb_layers=4,nb_units=256)
     pool = util.DataPool()
 
     #xs = util.Mixture_sampler_v2(nb_classes=nb_classes,N=10000,dim=x_dim,sd=1)
     xs = util.Mixture_sampler(nb_classes=nb_classes,N=10000,dim=x_dim,sd=1)
     #ys = util.DataSampler() #scRNA-seq data
-    ys = util.RA4_Sampler('scrna')
+    #ys = util.RA4_Sampler('scrna')
+    ys = util.RA4CoupleSampler()
     #ys = util.scATAC_Sampler()
     #ys = util.GMM_sampler(N=10000,n_components=nb_classes,dim=y_dim,sd=8)
 
 
-    RTM = RoundtripModel(g_net, h_net, dx_net, dy_net, xs, ys, nb_classes, data, pool, batch_size, alpha, beta, is_train)
+    CRTM = CoupleRTM(g_net1, g_net2, h_net1, h_net2, dx_net, dy_net1, dy_net2, xs, ys, nb_classes, data, pool, batch_size, alpha, beta, gamma, is_train)
 
     if args.train:
-        RTM.train(epochs=epochs, patience=patience)
+        CRTM.train(epochs=epochs, patience=patience)
     else:
         print('Attempting to Restore Model ...')
         if timestamp == '':
-            RTM.load(pre_trained=True)
+            CRTM.load(pre_trained=True)
             timestamp = 'pre-trained'
         else:
-            RTM.load(pre_trained=False, timestamp = timestamp, epoch = epochs-1)
+            CRTM.load(pre_trained=False, timestamp = timestamp, epoch = epochs-1)
             

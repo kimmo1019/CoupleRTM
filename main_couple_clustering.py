@@ -88,10 +88,11 @@ class RoundtripModel(object):
         #-log(D(x))
         self.g_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy_, labels=tf.ones_like(self.dy_)))
         self.h_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx_, labels=tf.ones_like(self.dx_)))
-        #coupling loss
+        
+        #Coupling loss
         self.diag = tf.linalg.tensor_diag_part(tf.matmul(tf.matmul(self.y1, self.A),tf.transpose(self.y2)))
         self.ind = tf.reduce_mean(tf.multiply(self.x_onehot1,self.x_onehot2),axis=1)
-        self.couple_loss = -tf.reduce_mean(tf.multiply(self.diag,self.ind))
+        self.couple_loss = -tf.reduce_mean(tf.multiply(self.diag,self.ind))/(tf.reduce_sum(self.ind)+1e-10)
 
         self.g_loss = self.g_loss_adv + self.alpha*self.l2_loss_x + self.beta*self.l2_loss_y
         self.h_loss = self.h_loss_adv + self.alpha*self.l2_loss_x + self.beta*self.l2_loss_y
@@ -169,7 +170,7 @@ class RoundtripModel(object):
         self.summary_writer=tf.summary.FileWriter(self.graph_dir,graph=tf.get_default_graph())
         start_time = time.time()
         for epoch in range(epochs):
-            lr = 1e-4 #if epoch < epochs/2 else 1e-4 #*float(epochs-epoch)/float(epochs-epochs/2)
+            lr = 1e-5 #if epoch < epochs/2 else 1e-4 #*float(epochs-epoch)/float(epochs-epochs/2)
             batch_idxs = max(len(data_y1_train),len(data_y2_train)) // self.batch_size
             for idx in range(batch_idxs):
                 bx, bx_onehot1, bx_onehot2 = self.x_sampler.train(batch_size,True)
