@@ -720,7 +720,8 @@ class Mixture_sampler(object):
             return X_c, self.X_d[indx1, :], self.X_d[indx2, :]
         else:
             indx = np.random.randint(low = 0, high = self.total_size, size = batch_size)
-            return self.X_c[indx, :],self.X_d[indx, :]
+            #return self.X_c[indx, :],self.X_d[indx, :]
+            return X_c,self.X_d[indx, :]
     
     def get_batch(self,batch_size,weights=None):
         X_batch_c = self.scale*np.random.normal(0, 1, (batch_size,self.dim))
@@ -1302,7 +1303,27 @@ if __name__=='__main__':
     import matplotlib
     matplotlib.use('agg')
     import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    from sklearn.cluster import KMeans
+    from sklearn.metrics.cluster import normalized_mutual_info_score, adjusted_rand_score
+    from sklearn.manifold import TSNE
     #import seaborn as sns
+    a = RA4CoupleSampler()
+    X = a.X_atac
+    Y = a.Y_atac
+    nb_classes=3
+    tsne = TSNE(n_components=2, verbose=1, init='pca', random_state=0)
+    tsne_enc = tsne.fit_transform(X)
+    colors = cm.rainbow(np.linspace(0, 1, nb_classes))
+    fig, ax = plt.subplots(figsize=(8,6))
+    for iclass in range(0, nb_classes):
+        idxs = Y==iclass
+        ax.scatter(tsne_enc[idxs, 0],tsne_enc[idxs, 1],c=colors[iclass],s=3,edgecolor=None,label='%d'%iclass)
+    plt.legend(title=r'Class', loc='best', numpoints=1, fontsize=8)
+    ax.set_xlabel('tSNE-dim1', fontsize=18)
+    ax.set_ylabel('tSNE-dim2', fontsize=18)
+    plt.savefig('datasets/RAd4/tsn_scATAC.png')
+    sys.exit()
     import random
     np.random.seed(2)
     genes = [item.split('\t')[0] for item in open('datasets/RAd4/scRNA_seq_RAd4.txt').readlines()]

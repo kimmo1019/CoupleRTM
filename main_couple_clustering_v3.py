@@ -22,7 +22,7 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 '''
-It contains one Dx
+It contains two Dx
 two Roundtrip model using the same latent variable (co-embedding)
 Instructions: Roundtrip model for clustering
     x,y - data drawn from base density and observation data (target density)
@@ -36,13 +36,14 @@ Instructions: Roundtrip model for clustering
     Dy(.) - discriminator network in y space (observation space)
 '''
 class CoupleRTM(object):
-    def __init__(self, g_net1, g_net2, h_net1, h_net2, dx_net, dy_net1, dy_net2, x_sampler, y_sampler, nb_classes, data, pool, batch_size, alpha, beta, gamma, is_train):
+    def __init__(self, g_net1, g_net2, h_net1, h_net2, dx_net1, dx_net2, dy_net1, dy_net2, x_sampler, y_sampler, nb_classes, data, pool, batch_size, alpha, beta, gamma, is_train):
         self.data = data
         self.g_net1 = g_net1
         self.g_net2 = g_net2
         self.h_net1 = h_net1
         self.h_net2 = h_net2
-        self.dx_net = dx_net
+        self.dx_net1 = dx_net1
+        self.dx_net2 = dx_net2
         self.dy_net1 = dy_net1
         self.dy_net2 = dy_net2
         self.x_sampler = x_sampler
@@ -54,7 +55,7 @@ class CoupleRTM(object):
         self.beta = beta
         self.gamma = gamma
         self.pool = pool
-        self.x_dim = self.dx_net.input_dim
+        self.x_dim = self.dx_net1.input_dim
         self.y_dim1 = self.dy_net1.input_dim
         self.y_dim2 = self.dy_net2.input_dim
         tf.reset_default_graph()
@@ -85,8 +86,8 @@ class CoupleRTM(object):
         self.dy2_ = self.dy_net2(self.y2_, reuse=False)
 
         #check this later, use one Dx or two Dx?
-        self.dx1_ = self.dx_net(self.x1_, reuse=False)
-        self.dx2_ = self.dx_net(self.x2_)
+        self.dx1_ = self.dx_net1(self.x1_, reuse=False)
+        self.dx2_ = self.dx_net2(self.x2_, reuse=False)
 
         self.l2_loss_x = (tf.reduce_mean((self.x - self.x1__)**2)+\
             tf.reduce_mean((self.x - self.x2__)**2))/2.0
@@ -98,7 +99,7 @@ class CoupleRTM(object):
             tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.x_logits2__,labels=self.x_onehot)))/2.0
         
         #Couple loss
-        self.couple_loss = -tf.reduce_mean(tf.linalg.tensor_diag_part(tf.matmul(tf.matmul(self.y1, self.A),tf.transpose(self.y2))))
+        self.couple_loss = -(tf.linalg.trace(tf.matmul(tf.matmul(self.y1_, self.A),tf.transpose(self.y2_))))*1.0/self.batch_size
 
         #-log(D(x))
         self.g_loss_adv = (tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy1_, labels=tf.ones_like(self.dy1_)))+\
@@ -123,17 +124,19 @@ class CoupleRTM(object):
         self.fake_y1 = tf.placeholder(tf.float32, [None, self.y_dim1], name='fake_y1')
         self.fake_y2 = tf.placeholder(tf.float32, [None, self.y_dim2], name='fake_y2')
         
-        self.dx = self.dx_net(self.x)
+        self.dx1 = self.dx_net1(self.x)
+        self.dx2 = self.dx_net2(self.x)
         self.dy1 = self.dy_net1(self.y1)
         self.dy2 = self.dy_net2(self.y2)
 
-        self.d_fake_x1 = self.dx_net(self.fake_x1)
-        self.d_fake_x2 = self.dx_net(self.fake_x2)
+        self.d_fake_x1 = self.dx_net1(self.fake_x1)
+        self.d_fake_x2 = self.dx_net2(self.fake_x2)
         self.d_fake_y1 = self.dy_net1(self.fake_y1)
         self.d_fake_y2 = self.dy_net2(self.fake_y2)
 
         #-log(D(x))
-        self.dx_loss = (2*tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx, labels=tf.ones_like(self.dx))) \
+        self.dx_loss = (tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx1, labels=tf.ones_like(self.dx1))) \
+            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx2, labels=tf.ones_like(self.dx2)))
             +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_x1, labels=tf.zeros_like(self.d_fake_x1))) \
             +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_x2, labels=tf.zeros_like(self.d_fake_x2))))/4.0
 
@@ -145,7 +148,8 @@ class CoupleRTM(object):
         self.d_loss = self.dx_loss + self.dy_loss
  
         #weight clipping
-        self.clip_dx = [var.assign(tf.clip_by_value(var, -0.01, 0.01)) for var in self.dx_net.vars]
+        self.clip_dx1 = [var.assign(tf.clip_by_value(var, -0.01, 0.01)) for var in self.dx_net1.vars]
+        self.clip_dx2 = [var.assign(tf.clip_by_value(var, -0.01, 0.01)) for var in self.dx_net2.vars]
         self.clip_dy1 = [var.assign(tf.clip_by_value(var, -0.01, 0.01)) for var in self.dy_net1.vars]
         self.clip_dy2 = [var.assign(tf.clip_by_value(var, -0.01, 0.01)) for var in self.dy_net2.vars]
 
@@ -153,7 +157,7 @@ class CoupleRTM(object):
         self.g_h_optim = tf.train.AdamOptimizer(learning_rate=self.lr, beta1=0.5, beta2=0.9) \
                 .minimize(self.g_h_loss, var_list=self.g_net1.vars+self.h_net1.vars+self.g_net2.vars+self.h_net2.vars)
         self.d_optim = tf.train.AdamOptimizer(learning_rate=self.lr, beta1=0.5, beta2=0.9) \
-                .minimize(self.d_loss, var_list=self.dx_net.vars+self.dy_net1.vars+self.dy_net2.vars)
+                .minimize(self.d_loss, var_list=self.dx_net1.vars+self.dx_net2.vars+self.dy_net1.vars+self.dy_net2.vars)
 
         now = datetime.datetime.now(dateutil.tz.tzlocal())
         self.timestamp = now.strftime('%Y%m%d_%H%M%S')
@@ -164,8 +168,10 @@ class CoupleRTM(object):
         self.l2_loss_y_summary = tf.summary.scalar('l2_loss_y',self.l2_loss_y)
         self.dx_loss_summary = tf.summary.scalar('dx_loss',self.dx_loss)
         self.dy_loss_summary = tf.summary.scalar('dy_loss',self.dy_loss)
+        self.CE_loss_summary = tf.summary.scalar('CE_loss',self.CE_loss_x)
+        self.couple_loss_summary = tf.summary.scalar('couple_loss',self.couple_loss)
         self.g_merged_summary = tf.summary.merge([self.g_loss_adv_summary, self.h_loss_adv_summary,\
-            self.l2_loss_x_summary,self.l2_loss_y_summary])
+            self.l2_loss_x_summary, self.l2_loss_y_summary, self.CE_loss_summary,self.couple_loss_summary])
         self.d_merged_summary = tf.summary.merge([self.dx_loss_summary,self.dy_loss_summary])
 
         #graph path for tensorboard visualization
@@ -419,7 +425,8 @@ if __name__ == '__main__':
     h_net1 = model.Encoder(input_dim=y_dim1,output_dim = x_dim+nb_classes,feat_dim=x_dim,name='h_net1',nb_layers=10,nb_units=256)
     h_net2 = model.Encoder(input_dim=y_dim2,output_dim = x_dim+nb_classes,feat_dim=x_dim,name='h_net2',nb_layers=10,nb_units=256)
 
-    dx_net = model.Discriminator(input_dim=x_dim,name='dx_net',nb_layers=4,nb_units=256)
+    dx_net1 = model.Discriminator(input_dim=x_dim,name='dx_net1',nb_layers=4,nb_units=256)
+    dx_net2 = model.Discriminator(input_dim=x_dim,name='dx_net2',nb_layers=4,nb_units=256)
     
     dy_net1 = model.Discriminator(input_dim=y_dim1,name='dy_net1',nb_layers=4,nb_units=256)
     dy_net2 = model.Discriminator(input_dim=y_dim2,name='dy_net2',nb_layers=4,nb_units=256)
@@ -434,7 +441,7 @@ if __name__ == '__main__':
     #ys = util.GMM_sampler(N=10000,n_components=nb_classes,dim=y_dim,sd=8)
 
 
-    CRTM = CoupleRTM(g_net1, g_net2, h_net1, h_net2, dx_net, dy_net1, dy_net2, xs, ys, nb_classes, data, pool, batch_size, alpha, beta, gamma, is_train)
+    CRTM = CoupleRTM(g_net1, g_net2, h_net1, h_net2, dx_net1, dx_net2, dy_net1, dy_net2, xs, ys, nb_classes, data, pool, batch_size, alpha, beta, gamma, is_train)
 
     if args.train:
         CRTM.train(epochs=epochs, patience=patience)
