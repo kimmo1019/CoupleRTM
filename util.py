@@ -30,6 +30,7 @@ class RA4CoupleSampler(object):
         self.N2 = len(self.Y_atac)
         #coupling matrix
         self.A = np.load('datasets/RAd4/couple_mat.npy').astype('float32')
+        print np.max(self.A),np.min(self.A)
 
     def train(self, batch_size):
         indx1 = np.random.randint(low = 0, high = self.N1, size = batch_size)
@@ -720,8 +721,8 @@ class Mixture_sampler(object):
             return X_c, self.X_d[indx1, :], self.X_d[indx2, :]
         else:
             indx = np.random.randint(low = 0, high = self.total_size, size = batch_size)
-            #return self.X_c[indx, :],self.X_d[indx, :]
-            return X_c,self.X_d[indx, :]
+            return self.X_c[indx, :],self.X_d[indx, :]
+            #return X_c,self.X_d[indx, :]
     
     def get_batch(self,batch_size,weights=None):
         X_batch_c = self.scale*np.random.normal(0, 1, (batch_size,self.dim))
@@ -1307,11 +1308,25 @@ if __name__=='__main__':
     from sklearn.cluster import KMeans
     from sklearn.metrics.cluster import normalized_mutual_info_score, adjusted_rand_score
     from sklearn.manifold import TSNE
+    from sklearn.decomposition import NMF
     #import seaborn as sns
     a = RA4CoupleSampler()
     X = a.X_atac
     Y = a.Y_atac
+    print X.shape, Y.shape,np.min(X),np.max(X),np.mean(X)
+    sys.exit()
     nb_classes=3
+    model = NMF(n_components=nb_classes, init='random', random_state=0, solver='cd', max_iter=1000)
+    W10 = model.fit_transform(X) #(n_samples,K)
+    H10 = model.components_ #(K x n_feats)
+    S10 = np.argmax(W10, 1)
+    print W10.shape, H10.shape,S10.shape
+    nmi1 = normalized_mutual_info_score(Y , S10)
+    ari1 = adjusted_rand_score(Y , S10)
+    print nmi1,ari1
+    sys.exit()
+
+    
     tsne = TSNE(n_components=2, verbose=1, init='pca', random_state=0)
     tsne_enc = tsne.fit_transform(X)
     colors = cm.rainbow(np.linspace(0, 1, nb_classes))
@@ -1322,7 +1337,7 @@ if __name__=='__main__':
     plt.legend(title=r'Class', loc='best', numpoints=1, fontsize=8)
     ax.set_xlabel('tSNE-dim1', fontsize=18)
     ax.set_ylabel('tSNE-dim2', fontsize=18)
-    plt.savefig('datasets/RAd4/tsn_scATAC.png')
+    plt.savefig('datasets/RAd4/tsn_scRNA.png')
     sys.exit()
     import random
     np.random.seed(2)

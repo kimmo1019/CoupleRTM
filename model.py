@@ -625,19 +625,25 @@ if __name__=='__main__':
     diag = tf.linalg.tensor_diag_part(tf.matmul(tf.matmul(y1, A),tf.transpose(y2)))
     x_onehot1 = tf.placeholder(tf.float32, [3, 5], name='onehot1')
     x_onehot2 = tf.placeholder(tf.float32, [3, 5], name='onehot2')
-    ind = tf.reduce_mean(tf.multiply(x_onehot1,x_onehot2),axis=1)
-    print diag, ind
-    out = tf.reduce_mean(tf.multiply(diag,ind))
-    print diag, ind, out
+    couple_loss = -(tf.linalg.trace(tf.matmul(tf.matmul(y1, A),tf.transpose(y2))))*1.0
+    
+    x = tf.placeholder(tf.float32, [16, 10], name='x')
+    dx_net  = Discriminator(input_dim=10,name='dx_net',nb_layers=2,nb_units=16)
+    dx = dx_net(x,reuse=False)
+    grad = tf.gradients(dx, x)[0] #(16,10)
+    grad_norm = tf.sqrt(tf.reduce_sum(tf.square(grad), axis=1))#(16,)
+    ddx = tf.square(grad_norm - 1.0)
+    print grad, grad_norm, ddx
     sys.exit()
+
     run_config = tf.ConfigProto()
     run_config.gpu_options.per_process_gpu_memory_fraction = 1.0
     run_config.gpu_options.allow_growth = True
     sess = tf.Session(config=run_config)
     sess.run(tf.global_variables_initializer())
     a=np.ones((3,2),dtype='float32')
-    b=np.ones((2,3),dtype='float32')
-    result = sess.run(out,feed_dict={x:a,y:b})
+    b=np.ones((3,2),dtype='float32')
+    result = sess.run(couple_loss,feed_dict={y1:a,y2:b})
     print result
     sys.exit()
 

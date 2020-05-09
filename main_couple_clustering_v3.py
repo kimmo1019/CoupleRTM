@@ -85,28 +85,27 @@ class CoupleRTM(object):
         self.dy1_ = self.dy_net1(self.y1_, reuse=False)
         self.dy2_ = self.dy_net2(self.y2_, reuse=False)
 
-        #check this later, use one Dx or two Dx?
         self.dx1_ = self.dx_net1(self.x1_, reuse=False)
         self.dx2_ = self.dx_net2(self.x2_, reuse=False)
 
-        self.l2_loss_x = (tf.reduce_mean((self.x - self.x1__)**2)+\
-            tf.reduce_mean((self.x - self.x2__)**2))/2.0
-        self.l2_loss_y = (tf.reduce_mean((self.y1 - self.y1__)**2)+\
-            tf.reduce_mean((self.y2 - self.y2__)**2))/2.0
+        self.l2_loss_x = tf.reduce_mean((self.x - self.x1__)**2)+\
+            tf.reduce_mean((self.x - self.x2__)**2)
+        self.l2_loss_y = tf.reduce_mean((self.y1 - self.y1__)**2)+\
+            tf.reduce_mean((self.y2 - self.y2__)**2)
 
         #self.CE_loss_x = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=self.x_onehot, logits=self.x_logits__))
-        self.CE_loss_x = (tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.x_logits1__,labels=self.x_onehot))+\
-            tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.x_logits2__,labels=self.x_onehot)))/2.0
+        self.CE_loss_x = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.x_logits1__,labels=self.x_onehot))+\
+            tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.x_logits2__,labels=self.x_onehot))
         
         #Couple loss
         self.couple_loss = -(tf.linalg.trace(tf.matmul(tf.matmul(self.y1_, self.A),tf.transpose(self.y2_))))*1.0/self.batch_size
 
         #-log(D(x))
-        self.g_loss_adv = (tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy1_, labels=tf.ones_like(self.dy1_)))+\
-            tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy2_, labels=tf.ones_like(self.dy2_))))/2.0
+        self.g_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy1_, labels=tf.ones_like(self.dy1_)))+\
+            tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy2_, labels=tf.ones_like(self.dy2_)))
         
-        self.h_loss_adv = (tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx1_, labels=tf.ones_like(self.dx1_)))+\
-            tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx2_, labels=tf.ones_like(self.dx2_))))/2.0
+        self.h_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx1_, labels=tf.ones_like(self.dx1_)))+\
+            tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx2_, labels=tf.ones_like(self.dx2_)))
 
         self.g_loss = self.g_loss_adv + self.alpha*self.l2_loss_x + self.beta*self.l2_loss_y
         self.h_loss = self.h_loss_adv + self.alpha*self.l2_loss_x + self.beta*self.l2_loss_y
@@ -135,15 +134,15 @@ class CoupleRTM(object):
         self.d_fake_y2 = self.dy_net2(self.fake_y2)
 
         #-log(D(x))
-        self.dx_loss = (tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx1, labels=tf.ones_like(self.dx1))) \
-            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx2, labels=tf.ones_like(self.dx2)))
+        self.dx_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx1, labels=tf.ones_like(self.dx1))) \
+            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx2, labels=tf.ones_like(self.dx2))) \
             +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_x1, labels=tf.zeros_like(self.d_fake_x1))) \
-            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_x2, labels=tf.zeros_like(self.d_fake_x2))))/4.0
+            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_x2, labels=tf.zeros_like(self.d_fake_x2)))
 
-        self.dy_loss = (tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy1, labels=tf.ones_like(self.dy1))) \
+        self.dy_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy1, labels=tf.ones_like(self.dy1))) \
             +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_y1, labels=tf.zeros_like(self.d_fake_y1))) \
             +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy2, labels=tf.ones_like(self.dy2))) \
-            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_y2, labels=tf.zeros_like(self.d_fake_y2))))/4.0
+            +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_y2, labels=tf.zeros_like(self.d_fake_y2)))
 
         self.d_loss = self.dx_loss + self.dy_loss
  
@@ -425,12 +424,12 @@ if __name__ == '__main__':
     h_net1 = model.Encoder(input_dim=y_dim1,output_dim = x_dim+nb_classes,feat_dim=x_dim,name='h_net1',nb_layers=10,nb_units=256)
     h_net2 = model.Encoder(input_dim=y_dim2,output_dim = x_dim+nb_classes,feat_dim=x_dim,name='h_net2',nb_layers=10,nb_units=256)
 
-    dx_net1 = model.Discriminator(input_dim=x_dim,name='dx_net1',nb_layers=4,nb_units=256)
-    dx_net2 = model.Discriminator(input_dim=x_dim,name='dx_net2',nb_layers=4,nb_units=256)
+    dx_net1 = model.Discriminator(input_dim=x_dim,name='dx_net1',nb_layers=2,nb_units=256)
+    dx_net2 = model.Discriminator(input_dim=x_dim,name='dx_net2',nb_layers=2,nb_units=256)
     
-    dy_net1 = model.Discriminator(input_dim=y_dim1,name='dy_net1',nb_layers=4,nb_units=256)
-    dy_net2 = model.Discriminator(input_dim=y_dim2,name='dy_net2',nb_layers=4,nb_units=256)
-    pool = util.DataPool()
+    dy_net1 = model.Discriminator(input_dim=y_dim1,name='dy_net1',nb_layers=2,nb_units=256)
+    dy_net2 = model.Discriminator(input_dim=y_dim2,name='dy_net2',nb_layers=2,nb_units=256)
+    pool = util.DataPool(10)
 
     #xs = util.Mixture_sampler_v2(nb_classes=nb_classes,N=10000,dim=x_dim,sd=1)
     xs = util.Mixture_sampler(nb_classes=nb_classes,N=10000,dim=x_dim,sd=1)
