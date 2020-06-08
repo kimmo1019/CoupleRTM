@@ -35,12 +35,13 @@ Instructions: Roundtrip model for clustering
     Dy(.) - discriminator network in y space (observation space)
 '''
 class RoundtripModel(object):
-    def __init__(self, g_net, h_net, dx_net, dy_net, x_sampler, y_sampler, nb_classes, data, pool, batch_size, alpha, beta, is_train):
+    def __init__(self, g_net, h_net, dx_net, dy_net, q_net, x_sampler, y_sampler, nb_classes, data, pool, batch_size, alpha, beta, is_train):
         self.data = data
         self.g_net = g_net
         self.h_net = h_net
         self.dx_net = dx_net
         self.dy_net = dy_net
+        self.q_net = q_net
         self.x_sampler = x_sampler
         self.y_sampler = y_sampler
         self.nb_classes = nb_classes
@@ -77,6 +78,7 @@ class RoundtripModel(object):
         #self.CE_loss_x = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=self.x_onehot, logits=self.x_logits__))
         self.CE_loss_x = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.x_logits__,labels=self.x_onehot))
         
+
         #standard gan
         #self.g_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy_, labels=tf.ones_like(self.dy_)))
         #self.h_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx_, labels=tf.ones_like(self.dx_)))
@@ -112,7 +114,7 @@ class RoundtripModel(object):
         self.dx_loss = -tf.reduce_mean(self.dx) + tf.reduce_mean(self.dx_)
         self.dy_loss = -tf.reduce_mean(self.dy) + tf.reduce_mean(self.dy_)
 
-        #gradient penalty for x 
+        #gradient penalty for x
         epsilon_x = tf.random_uniform([], 0.0, 1.0)
         x_hat = epsilon_x * self.x + (1 - epsilon_x) * self.x_
         dx_hat = self.dx_net(x_hat)
@@ -120,14 +122,14 @@ class RoundtripModel(object):
         grad_norm_x = tf.sqrt(tf.reduce_sum(tf.square(grad_x), axis=1))#(bs,)
         self.gpx_loss = tf.reduce_mean(tf.square(grad_norm_x - 1.0))
 
-        #gradient penalty for xy
+        #gradient penalty for y
         epsilon_y = tf.random_uniform([], 0.0, 1.0)
         y_hat = epsilon_y * self.y + (1 - epsilon_y) * self.y_
         dy_hat = self.dy_net(y_hat)
         grad_y = tf.gradients(dy_hat, y_hat)[0] #(bs,x_dim)
         grad_norm_y = tf.sqrt(tf.reduce_sum(tf.square(grad_y), axis=1))#(bs,)
         self.gpy_loss = tf.reduce_mean(tf.square(grad_norm_y - 1.0))
-        
+
         self.d_loss = self.dx_loss + self.dy_loss + 10*(self.gpx_loss + self.gpy_loss)
 
         self.lr = tf.placeholder(tf.float32, None, name='learning_rate')
@@ -176,16 +178,21 @@ class RoundtripModel(object):
         self.sess.run(tf.global_variables_initializer())
         self.summary_writer=tf.summary.FileWriter(self.graph_dir,graph=tf.get_default_graph())
         start_time = time.time()
+        weights = np.ones(self.nb_classes, dtype=np.float64) / float(self.nb_classes)
+        last_weights = np.ones(self.nb_classes, dtype=np.float64) / float(self.nb_classes)
+        diff_history=[]
+        #weights = np.array([666, 77, 75, 373, 92, 94],dtype='float32')/1377.0
+        #weights = np.array([195, 120, 519, 126, 190, 252, 366, 320])/2088.
         for batch_idx in range(nb_batches):
-            lr = 1e-4
+            lr = 2e-4
             #update D
             for _ in range(5):
-                bx, bx_onehot = self.x_sampler.train(self.batch_size)
+                bx, bx_onehot = self.x_sampler.train(self.batch_size,weights)
                 by = random.sample(data_y_train,self.batch_size)
                 d_summary,_ = self.sess.run([self.d_merged_summary, self.d_optim], feed_dict={self.x: bx, self.x_onehot: bx_onehot, self.y: by, self.lr:lr})
             self.summary_writer.add_summary(d_summary,batch_idx)
 
-            bx, bx_onehot = self.x_sampler.train(self.batch_size)
+            bx, bx_onehot = self.x_sampler.train(self.batch_size,weights)
             by = random.sample(data_y_train,self.batch_size)
             #update G
             g_summary, _ = self.sess.run([self.g_merged_summary ,self.g_h_optim], feed_dict={self.x: bx, self.x_onehot: bx_onehot, self.y: by, self.lr:lr})
@@ -210,8 +217,46 @@ class RoundtripModel(object):
             if (batch_idx+1) % (100) == 0:
                 if batch_idx+1 == nb_batches:
                     self.evaluate(timestamp,batch_idx,True)
+                    self.save(batch_idx)
                 else:
                     self.evaluate(timestamp,batch_idx)
+                    self.save(batch_idx)
+
+                ratio = 0.7
+                tol = 0.02
+                estimated_weights = self.estimate_weights(use_kmeans=False)
+                weights = ratio*weights + (1-ratio)*estimated_weights
+                weights = weights/np.sum(weights)
+                diff_weights = np.mean(np.abs(last_weights-weights))
+                diff_history.append(diff_weights)
+                if np.min(weights)<tol:
+                    weights = self.adjust_tiny_weights(weights,tol)
+                print diff_weights,weights
+            if len(diff_history)>100 and np.mean(diff_history[-10:])< 1e-2:
+                print('Reach a stable cluster')
+                self.evaluate(timestamp,batch_idx,True)
+                sys.exit()
+
+
+    def adjust_tiny_weights(self,weights,tol):
+        idx_less = np.where(weights<tol)[0]
+        idx_greater = np.where(weights>=tol)[0]
+        weights[idx_less] = np.array([np.random.uniform(2*tol,1./self.nb_classes) for item in idx_less])
+        weights[idx_greater] = weights[idx_greater]*(1-np.sum(weights[idx_less]))/np.sum(weights[idx_greater])
+        return weights    
+
+    def estimate_weights(self,use_kmeans=False):
+        data_y, label_y = self.y_sampler.load_all()
+        data_x_, data_x_onehot_ = self.predict_x(data_y)
+        if use_kmeans:
+            km = KMeans(n_clusters=nb_classes, random_state=0).fit(np.concatenate([data_x_,data_x_onehot_],axis=1))
+            label_infer = km.labels_
+        else:
+            label_infer = np.argmax(data_x_onehot_, axis=1)
+        weights = np.empty(self.nb_classes, dtype=np.float32)
+        for i in range(self.nb_classes):
+            weights[i] = list(label_infer).count(i)  
+        return weights/float(np.sum(weights)) 
 
     def evaluate(self,timestamp,batch_idx,run_kmeans=False):
         data_y, label_y = self.y_sampler.load_all()
@@ -223,9 +268,18 @@ class RoundtripModel(object):
         nmi = normalized_mutual_info_score(label_y, label_infer)
         ari = adjusted_rand_score(label_y, label_infer)
         #self.cluster_heatmap(batch_idx, label_infer, label_y)
-        print('RTM: Purity = {}, NMI = {}, ARI = {}'.format(purity,nmi,ari))
+        print('RTM: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
         f = open('%s/log.txt'%self.save_dir,'a+')
-        f.write('%.4f\t%.4f\t%.4f\t%d\n'%(purity,nmi,ari,batch_idx))
+        f.write('%.4f\t%.4f\t%.4f\t%d\n'%(nmi,ari,purity,batch_idx))
+        f.close()
+        km = KMeans(n_clusters=nb_classes, random_state=0).fit(np.concatenate([data_x_, data_x_onehot_],axis=1))
+        label_kmeans = km.labels_
+        purity = metric.compute_purity(label_kmeans, label_y)
+        nmi = normalized_mutual_info_score(label_y, label_kmeans)
+        ari = adjusted_rand_score(label_y, label_kmeans)
+        print('Latent-kmeans: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
+        f = open('%s/log.txt'%self.save_dir,'a+')
+        f.write('Latent-kmeans\t%.4f\t%.4f\t%.4f\t%d\n'%(nmi,ari,purity,batch_idx))
         f.close()
         #k-means
         if run_kmeans:
@@ -250,7 +304,7 @@ class RoundtripModel(object):
         plt.figure()
         df = pd.DataFrame(confusion_mat)
         sns.heatmap(df,annot=True, cmap="Blues")
-        plt.savefig('%s/heatmap_%d.png'%(self.save_dir,batch_idx),dpi=200)
+        plt.savefig('%s/heatmap_%d.png'%(self.save_dir,batch_idx))
         plt.close()
 
 
@@ -318,7 +372,7 @@ if __name__ == '__main__':
     parser.add_argument('--dx', type=int, default=10)
     parser.add_argument('--dy', type=int, default=10)
     parser.add_argument('--bs', type=int, default=64)
-    parser.add_argument('--nb_batches', type=int, default=50000)
+    parser.add_argument('--nb_batches', type=int, default=100000)
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--alpha', type=float, default=10.0)
     parser.add_argument('--beta', type=float, default=10.0)
@@ -338,22 +392,23 @@ if __name__ == '__main__':
     timestamp = args.timestamp
     is_train = args.train
 
-    g_net = model.Generator(input_dim=x_dim,output_dim = y_dim,name='g_net',nb_layers=10,nb_units=256,concat_every_fcl=False)
+    g_net = model.Generator(input_dim=x_dim,output_dim = y_dim,name='g_net',nb_layers=10,nb_units=512,concat_every_fcl=False)
     #the last layer of G is linear without activation func, maybe add a relu
     h_net = model.Encoder(input_dim=y_dim,output_dim = x_dim+nb_classes,feat_dim=x_dim,name='h_net',nb_layers=10,nb_units=256)
     dx_net = model.Discriminator(input_dim=x_dim,name='dx_net',nb_layers=2,nb_units=256)
     dy_net = model.Discriminator(input_dim=y_dim,name='dy_net',nb_layers=2,nb_units=256)
+    q_net = model.MutualNet(output_dim=nb_classes, name='mutual_net',nb_units=256)
     pool = util.DataPool(10)
 
     #xs = util.Mixture_sampler_v2(nb_classes=nb_classes,N=10000,dim=x_dim,sd=1)
     xs = util.Mixture_sampler(nb_classes=nb_classes,N=10000,dim=x_dim,sd=1)
     #ys = util.DataSampler() #scRNA-seq data
-    ys = util.RA4_Sampler('scrna')
-    #ys = util.scATAC_Sampler()
+    #ys = util.RA4_Sampler('scrna')
+    ys = util.scATAC_Sampler(data)
     #ys = util.GMM_sampler(N=10000,n_components=nb_classes,dim=y_dim,sd=8)
 
 
-    RTM = RoundtripModel(g_net, h_net, dx_net, dy_net, xs, ys, nb_classes, data, pool, batch_size, alpha, beta, is_train)
+    RTM = RoundtripModel(g_net, h_net, dx_net, dy_net, q_net, xs, ys, nb_classes, data, pool, batch_size, alpha, beta, is_train)
 
     if args.train:
         RTM.train(nb_batches=nb_batches, patience=patience)
