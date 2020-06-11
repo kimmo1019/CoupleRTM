@@ -184,7 +184,7 @@ class RoundtripModel(object):
         #weights = np.array([666, 77, 75, 373, 92, 94],dtype='float32')/1377.0
         #weights = np.array([195, 120, 519, 126, 190, 252, 366, 320])/2088.
         for batch_idx in range(nb_batches):
-            lr = 2e-4
+            lr = 5e-4
             #update D
             for _ in range(5):
                 bx, bx_onehot = self.x_sampler.train(self.batch_size,weights)
@@ -222,7 +222,7 @@ class RoundtripModel(object):
                     self.evaluate(timestamp,batch_idx)
                     self.save(batch_idx)
 
-                ratio = 0.7
+                ratio = 0.
                 tol = 0.02
                 estimated_weights = self.estimate_weights(use_kmeans=False)
                 weights = ratio*weights + (1-ratio)*estimated_weights
@@ -231,8 +231,10 @@ class RoundtripModel(object):
                 diff_history.append(diff_weights)
                 if np.min(weights)<tol:
                     weights = self.adjust_tiny_weights(weights,tol)
+                last_weights = copy.copy(weights)
                 print diff_weights,weights
-            if len(diff_history)>100 and np.mean(diff_history[-10:])< 1e-2:
+            
+            if len(diff_history)>100 and np.mean(diff_history[-5:]) < 5e-3:
                 print('Reach a stable cluster')
                 self.evaluate(timestamp,batch_idx,True)
                 sys.exit()
@@ -372,7 +374,7 @@ if __name__ == '__main__':
     parser.add_argument('--dx', type=int, default=10)
     parser.add_argument('--dy', type=int, default=10)
     parser.add_argument('--bs', type=int, default=64)
-    parser.add_argument('--nb_batches', type=int, default=100000)
+    parser.add_argument('--nb_batches', type=int, default=50000)
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--alpha', type=float, default=10.0)
     parser.add_argument('--beta', type=float, default=10.0)
