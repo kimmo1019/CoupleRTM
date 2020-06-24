@@ -21,6 +21,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
+print 'asdf'
 '''
 using wgan-gp
 Instructions: Roundtrip model for clustering
@@ -62,9 +63,13 @@ class RoundtripModel(object):
 
         self.y_ = self.g_net(self.x_combine,reuse=False)
 
-        self.x_, self.x_onehot_, self.x_logits_ = self.h_net(self.y,reuse=False)#continuous + softmax + before_softmax
+        self.x_latent_, self.x_onehot_ = self.h_net(self.y,reuse=False)#continuous + softmax + before_softmax
+        self.x_ = self.x_latent_[:,:self.x_dim]
+        self.x_logits_ = self.x_latent_[:,self.x_dim:]
         
-        self.x__, self.x_onehot__, self.x_logits__ = self.h_net(self.y_)
+        self.x_latent__, self.x_onehot__ = self.h_net(self.y_)
+        self.x__ = self.x_latent__[:,:self.x_dim]
+        self.x_logits__ = self.x_latent__[:,self.x_dim:]
 
         self.x_combine_ = tf.concat([self.x_, self.x_onehot_],axis=1)
         self.y__ = self.g_net(self.x_combine_)
@@ -177,14 +182,17 @@ class RoundtripModel(object):
         data_y_train = self.y_sampler.load_all()[0]
         self.sess.run(tf.global_variables_initializer())
         self.summary_writer=tf.summary.FileWriter(self.graph_dir,graph=tf.get_default_graph())
+        batches_per_eval = 100
+        #batches_per_eval = int(len(data_y_train)/self.batch_size)
         start_time = time.time()
         weights = np.ones(self.nb_classes, dtype=np.float64) / float(self.nb_classes)
         last_weights = np.ones(self.nb_classes, dtype=np.float64) / float(self.nb_classes)
         diff_history=[]
         #weights = np.array([666, 77, 75, 373, 92, 94],dtype='float32')/1377.0
         #weights = np.array([195, 120, 519, 126, 190, 252, 366, 320])/2088.
+        #weights = np.array([34, 344, 370])/748.
         for batch_idx in range(nb_batches):
-            lr = 5e-4
+            lr = 2e-4
             #update D
             for _ in range(5):
                 bx, bx_onehot = self.x_sampler.train(self.batch_size,weights)
@@ -199,7 +207,7 @@ class RoundtripModel(object):
             self.summary_writer.add_summary(g_summary,batch_idx)
 
             #quick test on a random batch data
-            if batch_idx % 100 == 0:
+            if batch_idx % batches_per_eval == 0:
                 g_loss_adv, h_loss_adv, CE_loss, l2_loss_x, l2_loss_y, g_loss, \
                     h_loss, g_h_loss, gpx_loss, gpy_loss = self.sess.run(
                     [self.g_loss_adv, self.h_loss_adv, self.CE_loss_x, self.l2_loss_x, self.l2_loss_y, \
@@ -214,7 +222,7 @@ class RoundtripModel(object):
                     (batch_idx, time.time() - start_time, g_loss_adv, h_loss_adv, CE_loss, gpx_loss, gpy_loss, l2_loss_x, l2_loss_y, \
                     g_loss, h_loss, g_h_loss, dx_loss, dy_loss, d_loss))                 
 
-            if (batch_idx+1) % (100) == 0:
+            if (batch_idx+1) % batches_per_eval == 0:
                 if batch_idx+1 == nb_batches:
                     self.evaluate(timestamp,batch_idx,True)
                     self.save(batch_idx)
@@ -290,9 +298,9 @@ class RoundtripModel(object):
             purity = metric.compute_purity(label_kmeans, label_y)
             nmi = normalized_mutual_info_score(label_y, label_kmeans)
             ari = adjusted_rand_score(label_y, label_kmeans)
-            print('K-means: Purity = {}, NMI = {}, ARI = {}'.format(purity,nmi,ari))
+            print('K-means: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
             f = open('%s/log.txt'%self.save_dir,'a+')
-            f.write('%.4f\t%.4f\t%.4f\n'%(purity,nmi,ari))
+            f.write('%.4f\t%.4f\t%.4f\n'%(nmi,ari,purity))
             f.close() 
     
     def cluster_heatmap(self,batch_idx,label_pre,label_true):
@@ -330,7 +338,7 @@ class RoundtripModel(object):
     def predict_x(self,y,bs=256):
         assert y.shape[-1] == self.y_dim
         N = y.shape[0]
-        x_pred = np.zeros(shape=(N, self.x_dim)) 
+        x_pred = np.zeros(shape=(N, self.x_dim+self.nb_classes)) 
         x_onehot = np.zeros(shape=(N, self.nb_classes)) 
         for b in range(int(np.ceil(N*1.0 / bs))):
             if (b+1)*bs > N:
@@ -338,7 +346,7 @@ class RoundtripModel(object):
             else:
                ind = np.arange(b*bs, (b+1)*bs)
             batch_y = y[ind, :]
-            batch_x_,batch_x_onehot_ = self.sess.run([self.x_, self.x_onehot_], feed_dict={self.y:batch_y})
+            batch_x_,batch_x_onehot_ = self.sess.run([self.x_latent_, self.x_onehot_], feed_dict={self.y:batch_y})
             x_pred[ind, :] = batch_x_
             x_onehot[ind, :] = batch_x_onehot_
         return x_pred, x_onehot

@@ -65,8 +65,12 @@ class RoundtripModel(object):
         self.y_ = self.g_net(self.x_combine,reuse=False)
 
         self.x_, self.x_onehot_, self.x_logits_ = self.h_net(self.y,reuse=False)#continuous + softmax + before_softmax
+        self.x_ = self.x_latent_[:,:self.x_dim]
+        self.x_logits_ = self.x_latent_[:,self.x_dim:]
         
-        self.x__, self.x_onehot__, self.x_logits__ = self.h_net(self.y_)
+        self.x_latent__, self.x_onehot__ = self.h_net(self.y_)
+        self.x__ = self.x_latent__[:,:self.x_dim]
+        self.x_logits__ = self.x_latent__[:,self.x_dim:]
 
         self.x_combine_ = tf.concat([self.x_, self.x_onehot_],axis=1)
         self.y__ = self.g_net(self.x_combine_)
@@ -90,10 +94,10 @@ class RoundtripModel(object):
         #standard gan
         #self.g_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dy_, labels=tf.ones_like(self.dy_)))
         #self.h_loss_adv = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.dx_, labels=tf.ones_like(self.dx_)))
-        #wgan
-        self.g_loss_adv = tf.reduce_mean(self.dy_)
-        self.h_loss_adv = tf.reduce_mean(self.dx_)
-        self.h_cat_loss = tf.reduce_mean(self.dx_cat_)
+        #wgan,modify
+        self.g_loss_adv = -tf.reduce_mean(self.dy_)
+        self.h_loss_adv = -tf.reduce_mean(self.dx_)
+        self.h_cat_loss = -tf.reduce_mean(self.dx_cat_)
         
 
         self.g_loss = self.g_loss_adv + self.alpha*self.l2_loss_x + self.beta*self.l2_loss_y
@@ -121,9 +125,9 @@ class RoundtripModel(object):
         #     +tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.d_fake_y, labels=tf.zeros_like(self.d_fake_y)))
         
         #wgan
-        self.dx_loss = tf.reduce_mean(self.dx) - tf.reduce_mean(self.dx_)
-        self.dy_loss = tf.reduce_mean(self.dy) - tf.reduce_mean(self.dy_)
-        self.dx_cat_loss = tf.reduce_mean(self.dx_cat) - tf.reduce_mean(self.dx_cat_)
+        self.dx_loss = -tf.reduce_mean(self.dx) + tf.reduce_mean(self.dx_)
+        self.dy_loss = -tf.reduce_mean(self.dy) + tf.reduce_mean(self.dy_)
+        self.dx_cat_loss = -tf.reduce_mean(self.dx_cat) + tf.reduce_mean(self.dx_cat_)
 
         #gradient penalty for x
         epsilon_x = tf.random_uniform([], 0.0, 1.0)
@@ -364,7 +368,7 @@ class RoundtripModel(object):
     def predict_x(self,y,bs=256):
         assert y.shape[-1] == self.y_dim
         N = y.shape[0]
-        x_pred = np.zeros(shape=(N, self.x_dim)) 
+        x_pred = np.zeros(shape=(N, self.x_dim+self.nb_classes)) 
         x_onehot = np.zeros(shape=(N, self.nb_classes)) 
         for b in range(int(np.ceil(N*1.0 / bs))):
             if (b+1)*bs > N:
@@ -372,7 +376,7 @@ class RoundtripModel(object):
             else:
                ind = np.arange(b*bs, (b+1)*bs)
             batch_y = y[ind, :]
-            batch_x_,batch_x_onehot_ = self.sess.run([self.x_, self.x_onehot_], feed_dict={self.y:batch_y})
+            batch_x_,batch_x_onehot_ = self.sess.run([self.x_latent_, self.x_onehot_], feed_dict={self.y:batch_y})
             x_pred[ind, :] = batch_x_
             x_onehot[ind, :] = batch_x_onehot_
         return x_pred, x_onehot
@@ -409,7 +413,7 @@ if __name__ == '__main__':
     parser.add_argument('--dy', type=int, default=10)
     parser.add_argument('--bs', type=int, default=64)
     parser.add_argument('--epochs', type=int, default=250)
-    parser.add_argument('--nb_batches', type=int, default=10000)
+    parser.add_argument('--nb_batches', type=int, default=50000)
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--alpha', type=float, default=10.0)
     parser.add_argument('--beta', type=float, default=10.0)
@@ -461,4 +465,3 @@ if __name__ == '__main__':
             timestamp = 'pre-trained'
         else:
             RTM.load(pre_trained=False, timestamp = timestamp, batch_idx = nb_batches-1)
-            
