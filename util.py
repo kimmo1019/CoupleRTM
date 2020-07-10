@@ -15,16 +15,19 @@ import cPickle as pickle
 import gzip
 import hdf5storage
 from scipy.io import loadmat
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA,TruncatedSVD
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics import pairwise_distances
 from sklearn.cluster import KMeans
 from sklearn.metrics.cluster import normalized_mutual_info_score, adjusted_rand_score
 from sklearn.metrics.cluster import homogeneity_score, adjusted_mutual_info_score
+from sklearn.preprocessing import MinMaxScaler,MaxAbsScaler
 import metric
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
+sns.set_style("whitegrid", {'axes.grid' : False})
 
 
 class RA4CoupleSampler(object):
@@ -91,17 +94,25 @@ class scATAC_Sampler(object):
         Y = np.array([uniq_labels.index(item) for item in labels])
         #X = hdf5storage.loadmat('datasets/scATAC/%s.mat'%name)['count_mat']
         #Y = np.load('datasets/scATAC/%s_label.npy'%name).astype('int64')
-        X,Y = self.filter_cells(X,Y,min_peaks=10)
-        X,Y = self.filter_peaks(X,Y,ratio=0.03)#or 0.02,0.03
+        #X,Y = self.filter_cells(X,Y,min_peaks=10)
+        #X = MinMaxScaler().fit_transform(X)
+        X,Y = self.filter_peaks(X,Y,ratio=0.03)
+        
         #TF-IDF transformation
         nfreqs = 1.0 * X / np.tile(np.sum(X,axis=0), (X.shape[0],1))
         X  = nfreqs * np.tile(np.log(1 + 1.0 * X.shape[1] / np.sum(X,axis=1)).reshape(-1,1), (1,X.shape[1]))
         X = X.T #(cells, peaks)
+        X = MinMaxScaler().fit_transform(X)
+        #MaxAbsScaler
         #PCA transformation
-        X = PCA(n_components=dim).fit_transform(X)
+        pca = PCA(n_components=dim).fit(X)
+        X = pca.transform(X)
+        #X = PCA(n_components=dim).fit_transform(X)
+        #X = TruncatedSVD(n_components=100).fit_transform(X)
         print X.shape
         self.correlation(X,Y)
         self.X,self.Y = X, Y
+        print self.X.shape,self.Y.shape,np.unique(self.Y)
         self.total_size = len(self.Y)
 
     def filter_peaks(self,X,Y,ratio):
@@ -122,15 +133,28 @@ class scATAC_Sampler(object):
         ami = adjusted_mutual_info_score(Y, label_kmeans)
         print('NMI = {}, ARI = {}, Purity = {},AMI = {}, Homogeneity = {}'.format(nmi,ari,purity,ami,homogeneity))
         if heatmap:
+            x_ticks = ['']*len(Y)
+            y_ticks = ['']*len(Y)
             idx = []
             for i in range(nb_classes):
+                sub_idx = [j for j,item in enumerate(Y) if item==i]
                 idx += [j for j,item in enumerate(Y) if item==i]
+                x_ticks[len(idx)-1] = str(i)
             assert len(idx)==len(Y)
             X = X[idx,:]
             Y = Y[idx]
+
+            #similarity_mat = pairwise_distances(X,metric='cosine')
             similarity_mat = cosine_similarity(X)
             print similarity_mat.shape
-            sns.heatmap(similarity_mat,cmap='Blues')
+            #sns.heatmap(similarity_mat,cmap='Blues')
+            fig, ax = plt.subplots()
+            #ax.set_yticks(range(len(y_ticks)))
+            ax.set_yticklabels(y_ticks)
+            ax.set_xticks(range(len(x_ticks)))
+            ax.set_xticklabels(x_ticks)
+            im = ax.imshow(similarity_mat,cmap='Blues')
+            plt.colorbar(im)
             plt.savefig('test.png')
 
 
