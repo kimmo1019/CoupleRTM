@@ -1,7 +1,6 @@
 import tensorflow as tf
 import tensorflow.contrib as tc
 import tensorflow.contrib.layers as tcl
-
 #the default is relu function
 def leaky_relu(x, alpha=0.2):
     return tf.maximum(tf.minimum(0.0, alpha * x), x)
@@ -9,7 +8,11 @@ def leaky_relu(x, alpha=0.2):
     #return tf.nn.tanh(x)
     #return tf.nn.elu(x)
 
-
+def conv_cond_concat(x, y):
+    """Concatenate conditioning vector on feature map axis."""
+    x_shapes = x.get_shape()
+    y_shapes = y.get_shape()
+    return tf.concat([x , y*tf.ones([tf.shape(x)[0], tf.shape(x)[1], tf.shape(x)[2] ,tf.shape(y)[3]])], 3)
 
 class Discriminator(object):
     def __init__(self, input_dim, name, nb_layers=2,nb_units=256):
@@ -28,6 +31,7 @@ class Discriminator(object):
                 #weights_initializer=tf.random_normal_initializer(stddev=0.02),
                 activation_fn=tf.identity
             )
+            #fc = tcl.batch_norm(fc)
             fc = leaky_relu(fc)
             for _ in range(self.nb_layers-1):
                 fc = tcl.fully_connected(
@@ -50,7 +54,6 @@ class Discriminator(object):
     def vars(self):
         return [var for var in tf.global_variables() if self.name in var.name]
 
-
 class Generator(object):
     def __init__(self, input_dim, output_dim, name, nb_layers=2, nb_units=256, concat_every_fcl=True):
         self.input_dim = input_dim
@@ -68,36 +71,104 @@ class Generator(object):
             y = z[:,self.input_dim:]
             fc = tcl.fully_connected(
                 z, self.nb_units,
-                #weights_initializer=tf.random_normal_initializer(stddev=0.02),
-                #weights_regularizer=tcl.l2_regularizer(2.5e-5),
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tcl.l2_regularizer(2.5e-5),
                 activation_fn=tf.identity
                 )
+            #fc = tc.layers.batch_norm(fc,decay=0.9,scale=True,updates_collections=None,is_training = True)
             fc = leaky_relu(fc)
+            #fc = tf.nn.dropout(fc,0.1)
             if self.concat_every_fcl:
                 fc = tf.concat([fc, y], 1)
             for _ in range(self.nb_layers-1):
                 fc = tcl.fully_connected(
                     fc, self.nb_units,
-                    #weights_initializer=tf.random_normal_initializer(stddev=0.02),
-                    #weights_regularizer=tcl.l2_regularizer(2.5e-5),
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                    weights_regularizer=tcl.l2_regularizer(2.5e-5),
                     activation_fn=tf.identity
                     )
+                #fc = tc.layers.batch_norm(fc,decay=0.9,scale=True,updates_collections=None,is_training = True)
+                
                 fc = leaky_relu(fc)
                 if self.concat_every_fcl:
                     fc = tf.concat([fc, y], 1)
             
             output = tcl.fully_connected(
                 fc, self.output_dim,
-                #weights_initializer=tf.random_normal_initializer(stddev=0.02),
-                #weights_regularizer=tcl.l2_regularizer(2.5e-5),
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tcl.l2_regularizer(2.5e-5),
+                #activation_fn=tf.sigmoid
                 activation_fn=tf.identity
                 )
+            #output = tc.layers.batch_norm(output,decay=0.9,scale=True,updates_collections=None,is_training = True)
+            #output = tf.nn.relu(output)
             return output
 
     @property
     def vars(self):
         return [var for var in tf.global_variables() if self.name in var.name]
 
+class MutualNet(object):# only categrory variable
+    def __init__(self, output_dim, name,nb_units=256):
+        self.output_dim = output_dim
+        self.name = name
+        self.nb_units = nb_units
+
+    def __call__(self, x, reuse=True):
+        with tf.variable_scope(self.name) as vs:
+            if reuse:
+                vs.reuse_variables()
+            
+            fc = tcl.fully_connected(
+                x, self.nb_units,
+                #weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                activation_fn=tf.identity
+            )
+            fc = leaky_relu(fc)
+            
+            output = tcl.fully_connected(
+                fc, self.output_dim, 
+                #weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                activation_fn=tf.identity
+                )
+            prob = tf.nn.softmax(output)
+            return prob
+
+    @property
+    def vars(self):
+        return [var for var in tf.global_variables() if self.name in var.name]
+
+
+class MutualNet_v2(object):# catogory + continuous
+    def __init__(self, latent_dim,nb_classes, name,nb_units=256):
+        self.latent_dim = latent_dim
+        self.nb_classes = nb_classes
+        self.name = name
+        self.nb_units = nb_units
+
+    def __call__(self, x, reuse=True):
+        with tf.variable_scope(self.name) as vs:
+            if reuse:
+                vs.reuse_variables()
+            
+            fc = tcl.fully_connected(
+                x, self.nb_units,
+                #weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                activation_fn=tf.identity
+            )
+            fc = leaky_relu(fc)
+            
+            output = tcl.fully_connected(
+                fc, self.nb_classes+self.latent_dim, 
+                #weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                activation_fn=tf.identity
+                )
+            prob = tf.nn.softmax(output[:,:self.nb_classes])
+            return prob,output[:,self.nb_classes:self.nb_classes+self.latent_dim]
+
+    @property
+    def vars(self):
+        return [var for var in tf.global_variables() if self.name in var.name]
 class GeneratorCouple(object):
     def __init__(self, input_dim, feat_dim, output_dim1, output_dim2, name, nb_layers=2, nb_units=256, concat_every_fcl=True):
         self.input_dim = input_dim
@@ -489,6 +560,52 @@ class Encoder(object):
                 )               
             logits = output[:, self.feat_dim:]
             y = tf.nn.softmax(logits)
+            #return output[:, 0:self.feat_dim], y, logits
+            return output, y
+
+    @property
+    def vars(self):
+        return [var for var in tf.global_variables() if self.name in var.name]
+
+
+class Encoder_1dcnn(object):
+    def __init__(self, input_dim, output_dim, feat_dim, name):
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.feat_dim = feat_dim
+        self.name = name
+
+    def __call__(self, x, reuse=True):
+        #with tf.variable_scope(self.name,reuse=tf.AUTO_REUSE) as vs:
+        with tf.variable_scope(self.name) as vs:
+            if reuse:
+                vs.reuse_variables()
+            x = tf.expand_dims(x, -1)
+            fc = tf.layers.conv1d(x,filters=64,kernel_size=10,strides=1,padding='valid')
+            print fc
+            fc = tf.layers.max_pooling1d(fc,pool_size=5,strides=3,padding='valid')
+            print fc
+            fc = tf.layers.conv1d(fc,filters=64,kernel_size=10,strides=1,padding='valid')
+            print fc
+            fc = tf.layers.max_pooling1d(fc,pool_size=5,strides=3,padding='valid')
+            print fc
+            fc = tf.layers.conv1d(fc,filters=64,kernel_size=10,strides=1,padding='valid')
+            print fc
+            fc = tf.layers.max_pooling1d(fc,pool_size=5,strides=3,padding='valid')
+            print fc
+            fc = tf.layers.conv1d(fc,filters=64,kernel_size=10,strides=1,padding='valid')
+            print fc
+            fc = tf.layers.max_pooling1d(fc,pool_size=5,strides=3,padding='valid')
+            print fc
+            fc = tf.keras.layers.GlobalAveragePooling1D()(fc)
+            print fc
+            output = tcl.fully_connected(
+                fc, self.output_dim, 
+                #weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                activation_fn=tf.identity
+                )               
+            logits = output[:, self.feat_dim:]
+            y = tf.nn.softmax(logits)
             return output[:, 0:self.feat_dim], y, logits
 
     @property
@@ -541,86 +658,416 @@ class EncoderCouple(object):
     def vars(self):
         return [var for var in tf.global_variables() if self.name in var.name]
 
-# class Encoder(object):
-#     def __init__(self, input_dim, output_dim, feat_dim, name):
-#         self.input_dim = input_dim
-#         self.output_dim = output_dim
-#         self.feat_dim = feat_dim
-#         self.name = name
-
-#     def __call__(self, x, reuse=True):
-#         with tf.variable_scope(self.name,reuse=tf.AUTO_REUSE) as vs:
-#             fc1 = tc.layers.fully_connected(
-#                 x, 256,
-#                 weights_initializer=tf.random_normal_initializer(stddev=0.02),
-#                 activation_fn=tf.identity
-#             )
-#             fc1 = leaky_relu(fc1)
-
-#             fc2 = tc.layers.fully_connected(
-#                 fc1, 256,
-#                 weights_initializer=tf.random_normal_initializer(stddev=0.02),
-#                 activation_fn=tf.identity
-#             )
-#             fc2 = leaky_relu(fc2)
-
-#             fc3 = tc.layers.fully_connected(fc2, self.output_dim, activation_fn=tf.identity)               
-#             logits = fc3[:, self.feat_dim:]
-#             y = tf.nn.softmax(logits)
-#             return fc3[:, 0:self.feat_dim], y, logits
-
-#     @property
-#     def vars(self):
-#         return [var for var in tf.global_variables() if self.name in var.name]
-
-
-#mapping the latent variable to a label representation
-class Transformer(object):
-    def __init__(self, input_dim, output_dim, name, nb_layers=2, nb_units=256):
+class Discriminator_img(object):
+    def __init__(self, input_dim, name, nb_layers=2,nb_units=256,dataset='mnist'):
         self.input_dim = input_dim
-        self.output_dim = output_dim
         self.name = name
         self.nb_layers = nb_layers
         self.nb_units = nb_units
+        self.dataset = dataset
 
     def __call__(self, z, reuse=True):
         with tf.variable_scope(self.name) as vs:
             if reuse:
                 vs.reuse_variables()
-            fc = tcl.fully_connected(
-                z, self.nb_units,
-                #weights_initializer=tf.random_normal_initializer(stddev=0.02),
-                #weights_regularizer=tcl.l2_regularizer(2.5e-5),
+            bs = tf.shape(z)[0]
+
+            if self.dataset=="mnist":
+                z = tf.reshape(z, [bs, 28, 28, 1])
+            elif self.dataset=="cifar10":
+                z = tf.reshape(z, [bs, 32, 32, 3])
+            conv = tcl.convolution2d(z, 64, [4,4],[2,2],
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
                 activation_fn=tf.identity
                 )
-            fc = leaky_relu(fc)
+            #(bs, 14, 14, 32)
+            conv = leaky_relu(conv)
             for _ in range(self.nb_layers-1):
-                fc = tcl.fully_connected(
-                    fc, self.nb_units,
-                    #weights_initializer=tf.random_normal_initializer(stddev=0.02),
-                    #weights_regularizer=tcl.l2_regularizer(2.5e-5),
+                conv = tcl.convolution2d(conv, 128, [4,4],[2,2],
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
                     activation_fn=tf.identity
                     )
-                fc = leaky_relu(fc)
-            logits = tcl.fully_connected(
-                fc, self.output_dim,
-                #weights_initializer=tf.random_normal_initializer(stddev=0.02),
-                #weights_regularizer=tcl.l2_regularizer(2.5e-5),
+                #conv = tc.layers.batch_norm(conv,decay=0.9,scale=True,updates_collections=None)
+                conv = leaky_relu(conv)
+            #(bs, 7, 7, 32)
+            #fc = tf.reshape(conv, [bs, -1])
+            fc = tcl.flatten(conv)
+            #(bs, 1568)
+            fc = tcl.fully_connected(
+                fc, 1024,
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
                 activation_fn=tf.identity
                 )
-            y = tf.nn.softmax(logits)
-            return y, logits
+            #fc = tc.layers.batch_norm(fc,decay=0.9,scale=True,updates_collections=None)
+            fc = leaky_relu(fc)
+            output = tcl.fully_connected(
+                fc, 1, 
+                activation_fn=tf.identity
+                )
+            return output
 
     @property
     def vars(self):
         return [var for var in tf.global_variables() if self.name in var.name]
 
+
+#generator for images, G()
+class Generator_img(object):
+    def __init__(self, nb_classes, output_dim, name, nb_layers=2,nb_units=256,dataset='mnist',is_training=True):
+        self.nb_classes = nb_classes
+        self.output_dim = output_dim
+        self.name = name
+        self.nb_layers = nb_layers
+        self.nb_units = nb_units
+        self.dataset = dataset
+        self.is_training = is_training
+
+    def __call__(self, z, reuse=True):
+        #with tf.variable_scope(self.name,reuse=tf.AUTO_REUSE) as vs:       
+        with tf.variable_scope(self.name) as vs:
+            if reuse:
+                vs.reuse_variables()
+            bs = tf.shape(z)[0]
+            y = z[:,-10:]
+            #yb = tf.reshape(y, shape=[bs, 1, 1, 10])
+            fc = tcl.fully_connected(
+                z, 1024,
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.identity
+                )
+            fc = tc.layers.batch_norm(fc,decay=0.9,scale=True,updates_collections=None,is_training = self.is_training)
+            fc = tf.nn.relu(fc)
+            #fc = tf.concat([fc, y], 1)
+
+            if self.dataset=='mnist':
+                fc = tcl.fully_connected(
+                    fc, 7*7*128,
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                    weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                    activation_fn=tf.identity
+                    )
+                fc = tf.reshape(fc, tf.stack([bs, 7, 7, 128]))
+            elif self.dataset=='cifar10':
+                fc = tcl.fully_connected(
+                    fc, 8*8*128,
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                    weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                    activation_fn=tf.identity
+                    )
+                fc = tf.reshape(fc, tf.stack([bs, 8, 8, 128]))
+            fc = tc.layers.batch_norm(fc,decay=0.9,scale=True,updates_collections=None,is_training = self.is_training)
+            fc = tf.nn.relu(fc)
+            #fc = conv_cond_concat(fc,yb)
+            conv = tcl.convolution2d_transpose(
+                fc, 64, [4,4], [2,2],
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.identity
+            )
+            #(bs,14,14,64)
+            conv = tc.layers.batch_norm(conv,decay=0.9,scale=True,updates_collections=None,is_training = self.is_training)
+            conv = tf.nn.relu(conv)
+            if self.dataset=='mnist':
+                output = tcl.convolution2d_transpose(
+                    conv, 1, [4, 4], [2, 2],
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                    weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                    activation_fn=tf.nn.sigmoid
+                )
+                output = tf.reshape(output, [bs, -1])
+            elif self.dataset=='cifar10':
+                output = tcl.convolution2d_transpose(
+                    conv, 3, [4, 4], [2, 2],
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                    weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                    activation_fn=tf.nn.sigmoid
+                )
+                output = tf.reshape(output, [bs, -1])
+            #(0,1) by tanh
+            return output
+
+    @property
+    def vars(self):
+        return [var for var in tf.global_variables() if self.name in var.name]
+
+#encoder for images, H()
+class Encoder_img(object):
+    def __init__(self, nb_classes, output_dim, name, nb_layers=2,nb_units=256,dataset='mnist',cond=True):
+        self.nb_classes = nb_classes
+        self.output_dim = output_dim
+        self.name = name
+        self.nb_layers = nb_layers
+        self.nb_units = nb_units
+        self.dataset = dataset
+        self.cond = cond
+
+    def __call__(self, x, reuse=True):
+        with tf.variable_scope(self.name) as vs:
+            if reuse:
+                vs.reuse_variables()
+            bs = tf.shape(x)[0]
+            if self.dataset=="mnist":
+                x = tf.reshape(x, [bs, 28, 28, 1])
+            elif self.dataset=="cifar10":
+                x = tf.reshape(x, [bs, 32, 32, 3])
+            conv = tcl.convolution2d(x,64,[4,4],[2,2],
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.identity
+                )
+            conv = leaky_relu(conv)
+            for _ in range(self.nb_layers-1):
+                conv = tcl.convolution2d(conv, self.nb_units, [4,4],[2,2],
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                    weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                    activation_fn=tf.identity
+                    )
+                conv = leaky_relu(conv)
+            conv = tcl.flatten(conv)
+            fc = tcl.fully_connected(conv, 1024, 
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.identity)
+            
+            fc = leaky_relu(fc)
+            output = tcl.fully_connected(
+                fc, self.output_dim, 
+                activation_fn=tf.identity
+                )        
+            logits = output[:, -self.nb_classes:]
+            y = tf.nn.softmax(logits)
+            return output[:, :-self.nb_classes], y, logits        
+
+    @property
+    def vars(self):
+        return [var for var in tf.global_variables() if self.name in var.name]
+
+#####for pathology imgs#######3
+
+class Discriminator_pathology_img(object):
+    def __init__(self, input_dim, name, nb_layers=2,nb_units=256,dataset='pathology'):
+        self.input_dim = input_dim
+        self.name = name
+        self.nb_layers = nb_layers
+        self.nb_units = nb_units
+        self.dataset = dataset
+
+    def __call__(self, z, reuse=True):
+        with tf.variable_scope(self.name) as vs:
+            if reuse:
+                vs.reuse_variables()
+            bs = tf.shape(z)[0]
+            z = tf.reshape(z, [bs, 256, 256, 3])
+            conv = tcl.convolution2d(z, 32, [4,4],[2,2],
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                activation_fn=tf.identity
+                )
+            conv = tcl.max_pool2d(conv,[2,2])
+            #(bs, 64, 64, 32)
+            conv = leaky_relu(conv)
+            for _ in range(2):
+                conv = tcl.convolution2d(conv, 64, [4,4],[2,2],
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                    activation_fn=tf.identity
+                    )
+                conv = tcl.max_pool2d(conv,[2,2])
+                #conv = tc.layers.batch_norm(conv,decay=0.9,scale=True,updates_collections=None)
+                conv = leaky_relu(conv)
+            #(bs, 4, 4, 64)
+            #fc = tf.reshape(conv, [bs, -1])
+            fc = tcl.flatten(conv)
+            #(bs, 1568)
+            fc = tcl.fully_connected(
+                fc, 1024,
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                activation_fn=tf.identity
+                )
+            #fc = tc.layers.batch_norm(fc,decay=0.9,scale=True,updates_collections=None)
+            fc = leaky_relu(fc)
+            output = tcl.fully_connected(
+                fc, 1, 
+                activation_fn=tf.identity
+                )
+            return output
+
+    @property
+    def vars(self):
+        return [var for var in tf.global_variables() if self.name in var.name]
+
+
+#generator for images, G()
+class Generator_pathology_img(object):
+    def __init__(self, nb_classes, output_dim, name, nb_layers=2,nb_units=256,dataset='mnist',is_training=True):
+        self.nb_classes = nb_classes
+        self.output_dim = output_dim
+        self.name = name
+        self.nb_layers = nb_layers
+        self.nb_units = nb_units
+        self.dataset = dataset
+        self.is_training = is_training
+
+    def __call__(self, z, reuse=True):
+        #with tf.variable_scope(self.name,reuse=tf.AUTO_REUSE) as vs:       
+        with tf.variable_scope(self.name) as vs:
+            if reuse:
+                vs.reuse_variables()
+            bs = tf.shape(z)[0]
+            y = z[:,-10:]
+            #yb = tf.reshape(y, shape=[bs, 1, 1, 10])
+            fc = tcl.fully_connected(
+                z, 1024,
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.identity
+                )
+            fc = tc.layers.batch_norm(fc,decay=0.9,scale=True,updates_collections=None,is_training = self.is_training)
+            fc = tf.nn.relu(fc)
+            #fc = tf.concat([fc, y], 1)
+            fc = tcl.fully_connected(
+                fc, 8*8*128,
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.identity
+                )
+            fc = tf.reshape(fc, tf.stack([bs, 8, 8, 128]))
+            fc = tc.layers.batch_norm(fc,decay=0.9,scale=True,updates_collections=None,is_training = self.is_training)
+            fc = tf.nn.relu(fc)
+            #fc = conv_cond_concat(fc,yb)
+            conv = tcl.convolution2d_transpose(
+                fc, 64, [4,4], [2,2],
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.identity
+            )
+            #(bs,16,16,64)
+            conv = tc.layers.batch_norm(conv,decay=0.9,scale=True,updates_collections=None,is_training = self.is_training)
+            conv = tf.nn.relu(conv)
+            for _ in range(3):
+                conv = tcl.convolution2d_transpose(
+                    conv, 64, [4,4], [2,2],
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                    weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                    activation_fn=tf.identity
+                )
+                conv = tc.layers.batch_norm(conv,decay=0.9,scale=True,updates_collections=None,is_training = self.is_training)
+                conv = tf.nn.relu(conv)
+            #(bs,128,128,64)
+
+            output = tcl.convolution2d_transpose(
+                conv, 3, [4, 4], [2, 2],
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.nn.sigmoid
+            )
+            output = tf.reshape(output, [bs, -1])
+            #(0,1) by tanh
+            return output
+
+    @property
+    def vars(self):
+        return [var for var in tf.global_variables() if self.name in var.name]
+
+class Encoder_pathology_img(object):
+    def __init__(self, nb_classes, output_dim, name, nb_layers=2,nb_units=256,dataset='mnist',cond=True):
+        self.nb_classes = nb_classes
+        self.output_dim = output_dim
+        self.name = name
+        self.nb_layers = nb_layers
+        self.nb_units = nb_units
+        self.dataset = dataset
+        self.cond = cond
+
+    def __call__(self, x, reuse=True):
+        with tf.variable_scope(self.name) as vs:
+            if reuse:
+                vs.reuse_variables()
+            bs = tf.shape(x)[0]
+            x = tf.reshape(x, [bs, 256, 256, 3])
+            conv = tcl.convolution2d(x,64,[4,4],[2,2],
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.identity
+                )
+            conv = leaky_relu(conv)
+            conv = tcl.max_pool2d(conv,[2,2])
+            #(bs,64,64,64)
+            for _ in range(self.nb_layers-1):
+                conv = tcl.convolution2d(conv, self.nb_units, [4,4],[2,2],
+                    weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                    weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                    activation_fn=tf.identity
+                    )
+                conv = leaky_relu(conv)
+            conv = tcl.max_pool2d(conv,[4,4],stride=4)
+            #(bs,8,8,64)
+            conv = tcl.flatten(conv)
+            fc = tcl.fully_connected(conv, 1024, 
+                weights_initializer=tf.random_normal_initializer(stddev=0.02),
+                weights_regularizer=tc.layers.l2_regularizer(2.5e-5),
+                activation_fn=tf.identity)
+            
+            fc = leaky_relu(fc)
+            output = tcl.fully_connected(
+                fc, self.output_dim, 
+                activation_fn=tf.identity
+                )        
+            logits = output[:, -self.nb_classes:]
+            y = tf.nn.softmax(logits)
+            return output[:, :-self.nb_classes], y, logits        
+
+    @property
+    def vars(self):
+        return [var for var in tf.global_variables() if self.name in var.name]
+
+
 if __name__=='__main__':
     import numpy as np
     import time
     from tensorflow.python.ops.parallel_for.gradients import jacobian,batch_jacobian
-    y1 = tf.placeholder(tf.float32, [3, 2], name='y1')
-    y2 = tf.placeholder(tf.float32, [3, 2], name='y2')
+    b=np.random.normal(size=(2,3)).astype('float32')
+    a = tf.convert_to_tensor(b)
+    b=2*tf.ones_like(a)
+    c=a*b 
+
+    one_hot_a = 1-tf.sign(tf.reduce_max(a,axis=1,keepdims=True)-a)
+    grad = tf.gradients(one_hot_a, a)[0]
+    run_config = tf.ConfigProto()
+    run_config.gpu_options.per_process_gpu_memory_fraction = 1.0
+    run_config.gpu_options.allow_growth = True
+    sess = tf.Session(config=run_config)
+    sess.run(tf.global_variables_initializer())
+    print sess.run([a,b,c])
+    sys.exit()
+    #W = tf.Variable(tf.zeros([3,5]))
+    thred = 20
+    wij2 = tf.matmul(W,tf.transpose(W))
+    c = tf.constant([1,3], tf.int32)
+    wi2 = tf.tile(tf.reshape(tf.reduce_sum(tf.square(W),axis=1),[3,1]),c)
+    c_t = tf.constant([3,1], tf.int32)
+    wj2 = tf.tile(tf.reshape(tf.reduce_sum(tf.square(W),axis=1),[1,3]),c_t)
+    diff_w  =wi2 - 2*wij2 + wj2
+    diff_w  = tf.nn.relu(thred - (wi2 - 2*wij2 + wj2))
+    #loss_w = (tf.reduce_sum(diff_w)-tf.trace(diff_w))/2
+    print wij2, wi2, wj2,diff_w, loss_w
+
+    run_config = tf.ConfigProto()
+    run_config.gpu_options.per_process_gpu_memory_fraction = 1.0
+    run_config.gpu_options.allow_growth = True
+    sess = tf.Session(config=run_config)
+    sess.run(tf.global_variables_initializer())
+    print sess.run(diff_w)
+    sys.exit()
+    y1 = tf.placeholder(tf.float32, [3, 100, 1], name='y1')
+    y2 = tf.placeholder(tf.float32, [64, 16415], name='y2')
+    h_net = Encoder_1dcnn(input_dim=20000, output_dim=32+10, feat_dim=32,name='h_net')
+    pre = h_net(y2,reuse=False)
+
+    #(3,4,5)
+    print y2, pre
+    sys.exit()
+    
+    l2_loss = tf.reduce_mean((y1-y2)**2)
     A = np.ones((2,2),dtype='float32')
     diag = tf.linalg.tensor_diag_part(tf.matmul(tf.matmul(y1, A),tf.transpose(y2)))
     x_onehot1 = tf.placeholder(tf.float32, [3, 5], name='onehot1')
@@ -633,8 +1080,6 @@ if __name__=='__main__':
     grad = tf.gradients(dx, x)[0] #(16,10)
     grad_norm = tf.sqrt(tf.reduce_sum(tf.square(grad), axis=1))#(16,)
     ddx = tf.square(grad_norm - 1.0)
-    print grad, grad_norm, ddx
-    sys.exit()
 
     run_config = tf.ConfigProto()
     run_config.gpu_options.per_process_gpu_memory_fraction = 1.0
@@ -642,8 +1087,8 @@ if __name__=='__main__':
     sess = tf.Session(config=run_config)
     sess.run(tf.global_variables_initializer())
     a=np.ones((3,2),dtype='float32')
-    b=np.ones((3,2),dtype='float32')
-    result = sess.run(couple_loss,feed_dict={y1:a,y2:b})
+    b=3*np.ones((3,2),dtype='float32')
+    result = sess.run(l2_loss,feed_dict={y1:a,y2:b})
     print result
     sys.exit()
 

@@ -21,7 +21,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
-print 'load package'
+
 '''
 using wgan-gp
 Instructions: Roundtrip model for clustering
@@ -64,7 +64,7 @@ class RoundtripModel(object):
 
         self.y_ = self.g_net(self.x_combine,reuse=False)
 
-        self.x_, self.x_onehot_, self.x_logits_ = self.h_net(self.y,reuse=False)#continuous + softmax + before_softmax
+        self.x_latent_, self.x_onehot_ = self.h_net(self.y,reuse=False)#continuous + softmax + before_softmax
         self.x_ = self.x_latent_[:,:self.x_dim]
         self.x_logits_ = self.x_latent_[:,self.x_dim:]
         
@@ -196,12 +196,12 @@ class RoundtripModel(object):
         self.d_merged_summary = tf.summary.merge([self.dx_loss_summary,self.dy_loss_summary])
 
         #graph path for tensorboard visualization
-        self.graph_dir = 'graph/cluster_{}_{}_x_dim={}_y_dim={}_alpha={}_beta={}'.format(self.timestamp,self.data,self.x_dim, self.y_dim, self.alpha, self.beta)
+        self.graph_dir = 'graph/{}/cluster_v1_{}_x_dim={}_y_dim={}_alpha={}_beta={}_ratio={}'.format(self.data,self.timestamp,self.x_dim, self.y_dim, self.alpha, self.beta, ratio)
         if not os.path.exists(self.graph_dir) and is_train:
             os.makedirs(self.graph_dir)
         
         #save path for saving predicted data
-        self.save_dir = 'data/cluster_{}_{}_x_dim={}_y_dim={}_alpha={}_beta={}'.format(self.timestamp,self.data,self.x_dim, self.y_dim, self.alpha, self.beta)
+        self.save_dir = 'results/{}/cluster_v1_{}_x_dim={}_y_dim={}_alpha={}_beta={}_ratio={}'.format(self.data,self.timestamp,self.x_dim, self.y_dim, self.alpha, self.beta, ratio)
         if not os.path.exists(self.save_dir) and is_train:
             os.makedirs(self.save_dir)
 
@@ -286,7 +286,7 @@ class RoundtripModel(object):
                     self.evaluate(timestamp,counter)
                     self.save(batch_idx)
 
-                ratio = 0.7
+                #ratio = 0.7
                 weights = ratio*weights + (1-ratio)*self.estimate_weights(use_kmeans=True)
                 weights = weights/np.sum(weights)
                 print weights
@@ -317,9 +317,18 @@ class RoundtripModel(object):
         nmi = normalized_mutual_info_score(label_y, label_infer)
         ari = adjusted_rand_score(label_y, label_infer)
         #self.cluster_heatmap(batch_idx, label_infer, label_y)
-        print('RTM: Purity = {}, NMI = {}, ARI = {}'.format(purity,nmi,ari))
+        print('RTM: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
         f = open('%s/log.txt'%self.save_dir,'a+')
-        f.write('%.4f\t%.4f\t%.4f\t%d\n'%(purity,nmi,ari,batch_idx))
+        f.write('%.4f\t%.4f\t%.4f\t%d\n'%(nmi,ari,purity,batch_idx))
+        f.close()
+        km = KMeans(n_clusters=nb_classes, random_state=0).fit(data_x_)
+        label_kmeans = km.labels_
+        purity = metric.compute_purity(label_kmeans, label_y)
+        nmi = normalized_mutual_info_score(label_y, label_kmeans)
+        ari = adjusted_rand_score(label_y, label_kmeans)
+        print('Latent-kmeans: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
+        f = open('%s/log.txt'%self.save_dir,'a+')
+        f.write('Latent-kmeans\t%.4f\t%.4f\t%.4f\t%d\n'%(nmi,ari,purity,batch_idx))
         f.close()
         #k-means
         if run_kmeans:
@@ -328,9 +337,9 @@ class RoundtripModel(object):
             purity = metric.compute_purity(label_kmeans, label_y)
             nmi = normalized_mutual_info_score(label_y, label_kmeans)
             ari = adjusted_rand_score(label_y, label_kmeans)
-            print('K-means: Purity = {}, NMI = {}, ARI = {}'.format(purity,nmi,ari))
+            print('K-means: NMI = {}, ARI = {}, Purity = {}'.format(nmi,ari,purity))
             f = open('%s/log.txt'%self.save_dir,'a+')
-            f.write('%.4f\t%.4f\t%.4f\n'%(purity,nmi,ari))
+            f.write('%.4f\t%.4f\t%.4f\n'%(nmi,ari,purity))
             f.close() 
     
     def cluster_heatmap(self,batch_idx,label_pre,label_true):
@@ -417,6 +426,7 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--alpha', type=float, default=10.0)
     parser.add_argument('--beta', type=float, default=10.0)
+    parser.add_argument('--ratio', type=float, default=0.5)
     parser.add_argument('--timestamp', type=str, default='')
     parser.add_argument('--train', type=bool, default=False)
     args = parser.parse_args()
@@ -431,6 +441,7 @@ if __name__ == '__main__':
     patience = args.patience
     alpha = args.alpha
     beta = args.beta
+    ratio = args.ratio
     timestamp = args.timestamp
     is_train = args.train
     g_net = model.Generator(input_dim=x_dim,output_dim = y_dim,name='g_net',nb_layers=4,nb_units=500,concat_every_fcl=False)

@@ -6,7 +6,6 @@ import datetime
 import argparse
 import importlib
 import tensorflow as tf
-tf.set_random_seed(0)
 import numpy as np
 import random
 import copy
@@ -21,7 +20,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
-print 'asdf'
+tf.set_random_seed(0)
 '''
 using wgan-gp
 Instructions: Roundtrip model for clustering
@@ -161,12 +160,12 @@ class RoundtripModel(object):
         self.d_merged_summary = tf.summary.merge([self.dx_loss_summary,self.dy_loss_summary])
 
         #graph path for tensorboard visualization
-        self.graph_dir = 'graph/cluster_{}_{}_x_dim={}_y_dim={}_alpha={}_beta={}'.format(self.timestamp,self.data,self.x_dim, self.y_dim, self.alpha, self.beta)
+        self.graph_dir = 'graph/{}/cluster_{}_x_dim={}_y_dim={}_alpha={}_beta={}_ratio={}'.format(self.data,self.timestamp,self.x_dim, self.y_dim, self.alpha, self.beta, ratio)
         if not os.path.exists(self.graph_dir) and is_train:
             os.makedirs(self.graph_dir)
         
         #save path for saving predicted data
-        self.save_dir = 'data/cluster_{}_{}_x_dim={}_y_dim={}_alpha={}_beta={}'.format(self.timestamp,self.data,self.x_dim, self.y_dim, self.alpha, self.beta)
+        self.save_dir = 'results/{}/cluster_{}_x_dim={}_y_dim={}_alpha={}_beta={}_ratio={}'.format(self.data,self.timestamp,self.x_dim, self.y_dim, self.alpha, self.beta, ratio)
         if not os.path.exists(self.save_dir) and is_train:
             os.makedirs(self.save_dir)
 
@@ -205,7 +204,6 @@ class RoundtripModel(object):
             #update G
             g_summary, _ = self.sess.run([self.g_merged_summary ,self.g_h_optim], feed_dict={self.x: bx, self.x_onehot: bx_onehot, self.y: by, self.lr:lr})
             self.summary_writer.add_summary(g_summary,batch_idx)
-
             #quick test on a random batch data
             if batch_idx % batches_per_eval == 0:
                 g_loss_adv, h_loss_adv, CE_loss, l2_loss_x, l2_loss_y, g_loss, \
@@ -230,7 +228,7 @@ class RoundtripModel(object):
                     self.evaluate(timestamp,batch_idx)
                     self.save(batch_idx)
 
-                ratio = 0.
+                #ratio = 0.
                 tol = 0.02
                 estimated_weights = self.estimate_weights(use_kmeans=False)
                 weights = ratio*weights + (1-ratio)*estimated_weights
@@ -242,7 +240,7 @@ class RoundtripModel(object):
                 last_weights = copy.copy(weights)
                 print diff_weights,weights
             
-            if len(diff_history)>100 and np.mean(diff_history[-5:]) < 5e-3:
+            if len(diff_history)>100 and np.mean(diff_history[-10:]) < 5e-3:
                 print('Reach a stable cluster')
                 self.evaluate(timestamp,batch_idx,True)
                 sys.exit()
@@ -282,7 +280,7 @@ class RoundtripModel(object):
         f = open('%s/log.txt'%self.save_dir,'a+')
         f.write('%.4f\t%.4f\t%.4f\t%d\n'%(nmi,ari,purity,batch_idx))
         f.close()
-        km = KMeans(n_clusters=nb_classes, random_state=0).fit(np.concatenate([data_x_, data_x_onehot_],axis=1))
+        km = KMeans(n_clusters=nb_classes, random_state=0).fit(data_x_)
         label_kmeans = km.labels_
         purity = metric.compute_purity(label_kmeans, label_y)
         nmi = normalized_mutual_info_score(label_y, label_kmeans)
@@ -386,6 +384,7 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=20)
     parser.add_argument('--alpha', type=float, default=10.0)
     parser.add_argument('--beta', type=float, default=10.0)
+    parser.add_argument('--ratio', type=float, default=0.5)
     parser.add_argument('--timestamp', type=str, default='')
     parser.add_argument('--train', type=bool, default=False)
     args = parser.parse_args()
@@ -399,9 +398,9 @@ if __name__ == '__main__':
     patience = args.patience
     alpha = args.alpha
     beta = args.beta
+    ratio = args.ratio
     timestamp = args.timestamp
     is_train = args.train
-
     g_net = model.Generator(input_dim=x_dim,output_dim = y_dim,name='g_net',nb_layers=10,nb_units=512,concat_every_fcl=False)
     #the last layer of G is linear without activation func, maybe add a relu
     h_net = model.Encoder(input_dim=y_dim,output_dim = x_dim+nb_classes,feat_dim=x_dim,name='h_net',nb_layers=10,nb_units=256)
@@ -409,12 +408,15 @@ if __name__ == '__main__':
     dy_net = model.Discriminator(input_dim=y_dim,name='dy_net',nb_layers=2,nb_units=256)
     q_net = model.MutualNet(output_dim=nb_classes, name='mutual_net',nb_units=256)
     pool = util.DataPool(10)
+    #np.random.seed(0) 
+    #random.seed(0)
+    #tf.set_random_seed(0)
 
     #xs = util.Mixture_sampler_v2(nb_classes=nb_classes,N=10000,dim=x_dim,sd=1)
     xs = util.Mixture_sampler(nb_classes=nb_classes,N=10000,dim=x_dim,sd=1)
     #ys = util.DataSampler() #scRNA-seq data
     #ys = util.RA4_Sampler('scrna')
-    ys = util.scATAC_Sampler(data)
+    ys = util.scATAC_Sampler(data,y_dim)
     #ys = util.GMM_sampler(N=10000,n_components=nb_classes,dim=y_dim,sd=8)
 
 
