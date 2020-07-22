@@ -169,7 +169,7 @@ class RoundtripModel(object):
         if not os.path.exists(self.save_dir) and is_train:
             os.makedirs(self.save_dir)
 
-        self.saver = tf.train.Saver(max_to_keep=500)
+        self.saver = tf.train.Saver(max_to_keep=5000)
 
         run_config = tf.ConfigProto()
         run_config.gpu_options.per_process_gpu_memory_fraction = 1.0
@@ -187,9 +187,6 @@ class RoundtripModel(object):
         weights = np.ones(self.nb_classes, dtype=np.float64) / float(self.nb_classes)
         last_weights = np.ones(self.nb_classes, dtype=np.float64) / float(self.nb_classes)
         diff_history=[]
-        #weights = np.array([666, 77, 75, 373, 92, 94],dtype='float32')/1377.0
-        #weights = np.array([195, 120, 519, 126, 190, 252, 366, 320])/2088.
-        #weights = np.array([34, 344, 370])/748.
         for batch_idx in range(nb_batches):
             lr = 2e-4
             #update D
@@ -431,4 +428,5 @@ if __name__ == '__main__':
             timestamp = 'pre-trained'
         else:
             RTM.load(pre_trained=False, timestamp = timestamp, batch_idx = nb_batches-1)
+            
             

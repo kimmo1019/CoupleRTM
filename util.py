@@ -28,7 +28,9 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set_style("whitegrid", {'axes.grid' : False})
-
+matplotlib.rc('xtick', labelsize=20) 
+matplotlib.rc('ytick', labelsize=20) 
+matplotlib.rcParams.update({'font.size': 22})
 
 class RA4CoupleSampler(object):
     def __init__(self):
@@ -78,6 +80,41 @@ class RA4_Sampler(object):
     def load_all(self):
          return self.X, self.Y
 
+def plot_corr(X,Y):
+    from scipy.stats import pearsonr,spearmanr
+    #['CLP', 'CMP', 'GMP', 'HSC', 'LMPP', 'MEP', 'MPP']
+    #6, 4, 0
+    X_MPP = X[Y==6,:]
+    X_LMPP = X[Y==4,:]
+    X_CLP = X[Y==0,:]
+    print X_MPP.shape, X_LMPP.shape, X_CLP.shape
+    meta_LMPP = np.mean(X_LMPP,axis=0)
+    corr_pearson_raw  = [pearsonr(item, meta_LMPP)[1] for item in X_LMPP]
+    corr_spearman_raw  = [spearmanr(item, meta_LMPP)[1] for item in X_LMPP]
+    print np.mean(corr_pearson_raw),np.mean(corr_spearman_raw)
+    def cal_corr(alpha):
+        corr_pearson_raw_interpolation = []
+        corr_spearman_raw_interpolation = []
+        for i in range(len(X_MPP)):
+            for j in range(len(X_CLP)):
+                mean = X_MPP[i,:]*alpha+X_CLP[j,:]*(1-alpha)
+                corr_pearson_raw_interpolation.append(pearsonr(mean,meta_LMPP)[1])
+                corr_spearman_raw_interpolation.append(spearmanr(mean,meta_LMPP)[1])
+        return corr_pearson_raw_interpolation,corr_spearman_raw_interpolation
+    corr_raw_pearson, corr_raw_spearman = cal_corr(1)
+    corr_latent_pearson, corr_latent_spearman = cal_corr(0)
+    dic = {}
+    dic['data'] = np.concatenate([corr_raw_pearson,corr_raw_spearman,corr_latent_pearson,corr_latent_spearman])
+    dic['corr'] = ['Pearson']*len(corr_raw_pearson)+['Spearman']*len(corr_raw_spearman) + \
+        ['Pearson']*len(corr_latent_pearson)+['Spearman']*len(corr_latent_spearman)
+    dic['type'] = ['Raw']*len(corr_raw_pearson)+['Raw']*len(corr_raw_spearman) + \
+        ['Interpolation']*len(corr_latent_pearson)+['Interpolation']*len(corr_latent_spearman)
+    ax = sns.boxplot(x="corr", y="data", hue="type",
+                    data=dic, palette="Set3")
+    plt.savefig('figs/trajactory/boxplot.png',dpi=600)
+    sys.exit()
+    
+
 
 #scATAC data
 class scATAC_Sampler(object):
@@ -88,30 +125,46 @@ class scATAC_Sampler(object):
         #GMvsHeK,(104260,748),3 classes
         #InSilico, (68069,1377),6 classes
         #Forebrain, (140102,2088),8 classes
-        X = pd.read_csv('datasets/scATAC/%s/sc_mat.txt'%name,sep='\t',header=0,index_col=[0]).values
-        labels = [item.strip() for item in open('datasets/scATAC/%s/label.txt'%name).readlines()]
-        uniq_labels = list(np.unique(labels))
-        Y = np.array([uniq_labels.index(item) for item in labels])
-        #X = hdf5storage.loadmat('datasets/scATAC/%s.mat'%name)['count_mat']
-        #Y = np.load('datasets/scATAC/%s_label.npy'%name).astype('int64')
-        #X,Y = self.filter_cells(X,Y,min_peaks=10)
-        #X = MinMaxScaler().fit_transform(X)
-        X,Y = self.filter_peaks(X,Y,ratio=0.03)
+        data = np.load('datasets/scATAC/%s/X_Y.npz'%name)
+        X, Y = data['arr_0'],data['arr_1']
+        #131-146 comment
+        # X = pd.read_csv('datasets/scATAC/%s/sc_mat.txt'%name,sep='\t',header=0,index_col=[0]).values
+        # labels = [item.strip() for item in open('datasets/scATAC/%s/label.txt'%name).readlines()]
+        # uniq_labels = list(np.unique(labels))
+        # Y = np.array([uniq_labels.index(item) for item in labels])
+        # #X,Y = self.filter_cells(X,Y,min_peaks=10)
+        # X,Y = self.filter_peaks(X,Y,ratio=0.03)
+        # #TF-IDF transformation
+        # nfreqs = 1.0 * X / np.tile(np.sum(X,axis=0), (X.shape[0],1))
+        # X  = nfreqs * np.tile(np.log(1 + 1.0 * X.shape[1] / np.sum(X,axis=1)).reshape(-1,1), (1,X.shape[1]))
+        # X = X.T #(cells, peaks)
+        # X = MinMaxScaler().fit_transform(X)
+        # #MaxAbsScaler
+        # #PCA transformation
+        # pca = PCA(n_components=dim).fit(X)
+        # X = pca.transform(X)
+        # print X.shape,uniq_labels
         
-        #TF-IDF transformation
-        nfreqs = 1.0 * X / np.tile(np.sum(X,axis=0), (X.shape[0],1))
-        X  = nfreqs * np.tile(np.log(1 + 1.0 * X.shape[1] / np.sum(X,axis=1)).reshape(-1,1), (1,X.shape[1]))
-        X = X.T #(cells, peaks)
-        X = MinMaxScaler().fit_transform(X)
-        #MaxAbsScaler
-        #PCA transformation
-        pca = PCA(n_components=dim).fit(X)
-        X = pca.transform(X)
-        #X = PCA(n_components=dim).fit_transform(X)
-        #X = TruncatedSVD(n_components=100).fit_transform(X)
-        print X.shape
+        #plot_corr(X,Y)
+
+        #only consider CLP, LMPP, MPP
+        #idx = [i for i, item in enumerate(Y) if item in [0,4,6]]
+        #X = X[idx,:]
+        #Y = Y[idx]
+        #dic={0:0,4:1,6:2}
+        #Y = np.array([dic[item] for item in Y])
+        #np.savez('datasets/scATAC/%s/pca_sub3.npz'%name,X,Y)
+
+        #only consider CLP, MPP
+        # idx = [i for i, item in enumerate(Y) if item in [0,6]]
+        # X = X[idx,:]
+        # Y = Y[idx]
+        # dic={0:0,6:1}
+        # Y = np.array([dic[item] for item in Y])
+
         self.correlation(X,Y)
         self.X,self.Y = X, Y
+        #np.savez('datasets/scATAC/%s/X_Y.npz'%name,self.X,self.Y)
         print self.X.shape,self.Y.shape,np.unique(self.Y)
         self.total_size = len(self.Y)
 
@@ -155,8 +208,7 @@ class scATAC_Sampler(object):
             ax.set_xticklabels(x_ticks)
             im = ax.imshow(similarity_mat,cmap='Blues')
             plt.colorbar(im)
-            plt.savefig('test.png')
-
+            plt.savefig('heatmap_%s.png'%self.name)
 
     # for data sampling given batch size
     def train(self, batch_size, label = False):
@@ -465,5 +517,56 @@ if __name__=='__main__':
     from sklearn.metrics.cluster import normalized_mutual_info_score, adjusted_rand_score
     from sklearn.manifold import TSNE
     from sklearn.decomposition import NMF
+    from scipy.io import mmread
+    labels = [item.strip().split('\t')[-1] for item in open('datasets/scATAC/scATAC-seq_data_for_liuqiao/mouse_atlas/cell_metadata.txt').readlines()[1:]]
+    f_out = open('datasets/scATAC/Mouse_atlas/label.txt','w')
+    f_out.write('\n'.join(labels))
+    f_out.close()
+    sys.exit()
+    #peaks, cells
+    data = mmread('datasets/scATAC/scATAC-seq_data_for_liuqiao/mouse_atlas/atac_matrix.binary.qc_filtered.mtx').T.tocsr().astype('int32')
+    peaks = np.array([item.split('\t')[0] for item in open('datasets/scATAC/Mouse_atlas/sc_mat_0.1.txt').readlines()[1:]])
+    print peaks.shape
+    nb_cells = data.shape[0]
+    ratio = 0.03
+    count = np.array((data >0).sum(0)).squeeze()
+    ind = np.where(count > ratio*nb_cells)[0]
+    data = data[:,ind]
+    peaks = peaks[ind]
+    print(data.shape,peaks.shape,data.T.shape)
+    #np.save('datasets/scATAC/Mouse_atlas/sc_mat.npy',data.T)
+    columns = ['cell%d'%i for i in range(nb_cells)]
+    data = data.toarray()
+    data_pd = pd.DataFrame(data.T,index=peaks, columns=columns)
+    data_pd.to_csv('datasets/scATAC/Mouse_atlas/sc_mat.txt',sep='\t')
+
+    sys.exit()
     #import seaborn as sns
-    a = RA4CoupleSampler()
+    Y = loadmat('datasets/scATAC/scATAC-seq_data_for_liuqiao/ALL_cell_labels.mat')['ALL_cell_labels']
+    Y = np.array([item[0] for item in Y[:,0]])
+    donor_label = loadmat('datasets/scATAC/scATAC-seq_data_for_liuqiao/ALL_donor_labels.mat')['ALL_donor_labels']
+    donor_label = np.array([item[0] for item in donor_label[:,0]])
+    X = hdf5storage.loadmat('datasets/scATAC/scATAC-seq_data_for_liuqiao/ALL_count_mat.mat')['ALL_count_mat']
+    peaks = pd.read_csv('datasets/scATAC/BM0828/sc_mat.txt',sep='\t',header=0,index_col=[0]).index
+    
+
+    #select BM0828 and BM1077
+    idx_all = []
+    dic = {}
+    for i in range(len(Y)):
+        if Y[i] in ['MPP','LMPP','CLP'] and donor_label[i] in ['BM0828','BM1077']:
+            idx_all.append(i)
+    X = X[idx_all,:]
+    Y = Y[idx_all]
+    donor_label = donor_label[idx_all]
+    print X.shape,Y.shape,donor_label.shape,np.unique(Y),np.unique(donor_label)
+    columns = ['cell%d'%i for i in range(len(Y))]
+    pd_data = pd.DataFrame(X.T,index = peaks, columns=columns)
+    pd_data.to_csv('datasets/scATAC/BM0828_BM1077/sc_mat.txt','\t')
+    f_out = open('datasets/scATAC/BM0828_BM1077/label.txt','w')
+    f_out.write('\n'.join(Y))
+    f_out.close()
+    f_out = open('datasets/scATAC/BM0828_BM1077/donor.txt','w')
+    f_out.write('\n'.join(donor_label))
+    f_out.close()
+    
